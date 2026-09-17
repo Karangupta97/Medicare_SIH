@@ -5,7 +5,7 @@ const rawApiUrl = import.meta.env.VITE_API_URL;
 const API_URL =
   rawApiUrl && rawApiUrl !== "undefined"
     ? rawApiUrl
-    : "https://medicare-backend-vl01.onrender.com";
+    : "https://medicare-sih.onrender.com";
 
 const useFamilyVaultStore = create((set, get) => ({
   vault: null,

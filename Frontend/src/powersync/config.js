@@ -11,7 +11,7 @@ const rawApiUrl = import.meta.env.VITE_API_URL;
 export const API_URL =
   rawApiUrl && rawApiUrl !== "undefined"
     ? rawApiUrl
-    : "https://medicare-backend-vl01.onrender.com";
+    : "https://medicare-sih.onrender.com";
 
 export const POWERSYNC_URL = import.meta.env.VITE_POWERSYNC_URL || "";
 

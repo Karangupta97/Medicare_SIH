@@ -9,7 +9,7 @@ const rawApiUrl = import.meta.env.VITE_API_URL;
 const API_URL =
   rawApiUrl && rawApiUrl !== "undefined"
     ? rawApiUrl
-    : "https://medicare-backend-vl01.onrender.com";
+    : "https://medicare-sih.onrender.com";
 
 // Utility function to get the staff token for doctor verification
 const getAuthToken = () => {

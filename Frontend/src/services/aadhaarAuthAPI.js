@@ -31,7 +31,7 @@ const rawApiUrl = import.meta.env.VITE_API_URL;
 const API_URL =
   rawApiUrl && rawApiUrl !== "undefined"
     ? rawApiUrl
-    : "https://medicare-backend-vl01.onrender.com";
+    : "https://medicare-sih.onrender.com";
 
 // HTTPS-only guard. In production a plain-HTTP API base leaks Aadhaar/OTP/PIN in
 // transit. We warn hard in dev and refuse in prod builds.

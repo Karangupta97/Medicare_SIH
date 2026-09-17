@@ -70,7 +70,7 @@ export default defineConfig({
       "/api": {
         // target: "http://localhost:4000",
         // target: ["http://localhost:4000", "http://192.168.0.107:4000/"],
-        target: "https://medicare-backend-vl01.onrender.com",
+        target: "https://medicare-sih.onrender.com",
         changeOrigin: true,
         secure: false,
         rewrite: (path) => path,
