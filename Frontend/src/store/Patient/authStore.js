@@ -166,6 +166,58 @@ const useAuthStore = create((set, get) => ({
     set({ token });
   },
 
+  /**
+   * Bridge from the Aadhaar auth flow into this (existing) patient auth store so
+   * the SAME dashboard flow (ProtectedRoute → DashboardLayout → /api/auth/user)
+   * works unchanged after an Aadhaar login/registration.
+   *
+   * WHY: ProtectedRoute gates on this store's `isAuthenticated` (derived from
+   * localStorage `token`) and `user.isverified`. The Aadhaar flow issues its own
+   * access token; we write it here so the existing guards pass and the periodic
+   * profile refresh (which calls /api/auth/user with the Bearer token) hydrates
+   * the full user document. The Aadhaar access token carries { id, umid } which
+   * the backend verifyToken accepts, so /api/auth/* works with it.
+   *
+   * @param {{ accessToken: string, user: { id?: string, _id?: string, umid?: string, name?: string, lastname?: string, status?: string } }} payload
+   */
+  hydrateFromAadhaar: ({ accessToken, user }) => {
+    const userId = user?.id || user?._id;
+    if (accessToken) safeStorageAccess.setItem('token', accessToken);
+    if (userId) safeStorageAccess.setItem('userId', userId);
+
+    // Aadhaar accounts are inherently verified (isverified:true on the backend),
+    // so mark verified here to satisfy ProtectedRoute's verification gate.
+    const bridgedUser = {
+      _id: userId,
+      umid: user?.umid,
+      name: user?.name || 'Patient',
+      lastname: user?.lastname || '',
+      isverified: true,
+      status: user?.status || 'active',
+    };
+
+    // Start the periodic profile refresh (same as email login) so the full user
+    // document (photo, plan, address, etc.) is fetched from /api/auth/user.
+    if (!get().refreshInterval) {
+      const interval = setInterval(() => {
+        get().refreshUserData();
+      }, 60000);
+      set({ refreshInterval: interval });
+    }
+
+    set({
+      token: accessToken,
+      userId,
+      user: bridgedUser,
+      isAuthenticated: true,
+      isCheckingAuth: false,
+      error: null,
+    });
+
+    // Kick off an immediate profile fetch so the dashboard shows real data.
+    get().refreshUserData?.().catch(() => {});
+  },
+
   setUser: (userData) => {
     if (userData) {
       // Store only the user ID in localStorage for persistence
@@ -511,6 +563,16 @@ const useAuthStore = create((set, get) => ({
       // Clear localStorage
       safeStorageAccess.removeItem('userId');
       safeStorageAccess.removeItem('token');
+      
+      // Wipe the encrypted PowerSync local DB so no PHI is left cached for the
+      // next user of this device. Dynamic import avoids a static dependency /
+      // circular import and is a no-op when PowerSync isn't enabled.
+      try {
+        const { teardownPowerSync } = await import("../../powersync/PowerSyncProvider");
+        await teardownPowerSync();
+      } catch {
+        /* PowerSync not active — nothing to clear */
+      }
       
       // Clear the refresh interval
       if (get().refreshInterval) {

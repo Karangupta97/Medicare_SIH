@@ -1,4 +1,5 @@
 import { Report } from "../../models/User/report.model.js";
+import { User } from "../../models/User/user.model.js";
 import { uploadFile, deleteFile, getFileUrl } from "../../services/s3.service.js";
 import { io } from "../../server.js";
 import { sendNotificationToUser } from "../../utils/notifications.js";
@@ -160,8 +161,18 @@ export const uploadReport = async (req, res) => {
     }
 
     try {
+      // Resolve the uploader's name. Prefer the JWT claim (fast path), but fall
+      // back to the DB user when the token doesn't carry a name (e.g. an older
+      // Aadhaar access token issued before `name` was added to the claims). This
+      // keeps uploads working for already-logged-in users without a re-login.
+      let uploaderName = req.user?.name;
+      if (!uploaderName) {
+        const dbUser = await User().findById(req.user.id).select("name").lean();
+        uploaderName = dbUser?.name || "patient";
+      }
+
       // Upload file to S3 using the service
-      const { s3Key, fileUrl, formattedFilename } = await uploadFile(file, req.user.id, req.user.name);
+      const { s3Key, fileUrl, formattedFilename } = await uploadFile(file, req.user.id, uploaderName);
 
       // Create report in database
       const ReportModel = Report();

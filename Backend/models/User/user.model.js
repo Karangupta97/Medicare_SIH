@@ -3,17 +3,62 @@ import bcryptjs from "bcryptjs";
 import { getPatientDB } from "../../DB/connections.js";
 
 const userSchema = new mongoose.Schema({
+  // --- Legacy email/password (now OPTIONAL) ---
+  // The primary patient auth is Aadhaar-based. email/password are kept for the
+  // deprecated email flow and legacy accounts, so they must be optional now.
+  // `unique + sparse` lets many Aadhaar users have no email without colliding on
+  // a null value (a plain unique index would reject the 2nd null email).
   email: {
     type: String,
-    required: true,
+    required: false,
     unique: true,
+    sparse: true,
     trim: true,
     lowercase: true,
   },
   password: {
     type: String,
-    required: true,
+    required: false,
   },
+
+  // --- Aadhaar-based authentication ---
+  // HMAC-SHA256(aadhaar, pepper). unique + sparse = one account per Aadhaar,
+  // while legacy (email) accounts with no hash (null) don't collide. This unique
+  // index is the FINAL authority against concurrent-registration races.
+  aadhaar_identity_hash: {
+    type: String,
+    unique: true,
+    sparse: true,
+    index: true,
+    default: null,
+  },
+  aadhaar_hash_version: { type: String, default: null },
+  // Login PIN (argon2id preferred; per-user salt stored explicitly).
+  pin_hash: { type: String, default: null },
+  pin_salt: { type: String, default: null },
+  pin_algo: { type: String, enum: ["argon2id", "bcrypt", null], default: null },
+  pin_set_at: { type: Date, default: null },
+  // Lockout / brute-force state for the PIN login path.
+  failed_pin_attempts: { type: Number, default: 0 },
+  pin_locked_until: { type: Date, default: null },
+  pin_failures_window_start: { type: Date, default: null },
+  pin_failures_in_window: { type: Number, default: 0 },
+  // Account lifecycle (frozen/deleted both return generic invalid-credentials).
+  status: {
+    type: String,
+    enum: ["active", "frozen", "deleted"],
+    default: "active",
+    index: true,
+  },
+  // Bounded list of known device fingerprints for step-up decisions.
+  known_devices: [
+    {
+      fingerprint: { type: String, required: true },
+      first_seen_at: { type: Date, default: Date.now },
+      last_seen_at: { type: Date, default: Date.now },
+    },
+  ],
+
   name: {
     type: String,
     required: true,

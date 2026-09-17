@@ -32,6 +32,18 @@ export default defineConfig({
   ].filter(Boolean),
   root: '.',  // Ensures Vite looks in the correct folder
   publicDir: 'public',
+  // PowerSync's web SDK ships a code-split web worker + wasm. Vite defaults its
+  // worker output to 'iife', which rollup rejects for code-splitting builds, so
+  // we switch worker output to ES modules (required by @powersync/web).
+  worker: {
+    format: 'es',
+  },
+  // Don't pre-bundle PowerSync's wasm/worker packages (they must load as real
+  // ESM/assets, not be optimized into a single CJS chunk).
+  optimizeDeps: {
+    exclude: ['@powersync/web', '@journeyapps/wa-sqlite'],
+    include: ['@powersync/react'],
+  },
   build: {
     outDir: 'dist',
     assetsDir: 'assets',

@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useCallback } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { 
   FiFileText, FiCheckCircle, FiClock, FiBell, 
@@ -9,18 +9,20 @@ import {
   FiTrash2, FiMoreVertical, FiSettings, FiX
 } from 'react-icons/fi';
 import { FaPills, FaHeartbeat, FaHospital, FaStethoscope, FaNotesMedical } from 'react-icons/fa';
-import { useAuthStore } from '../../store/Patient/authStore';
-import usePatientStore from '../../store/Patient/patientstore';
 import { toast } from 'react-hot-toast';
-import { formatDistanceToNow } from 'date-fns';
+// PowerSync (offline): local-first read + optimistic writes with online fallback.
+import { useNotifications as usePowerNotifications } from '../../powersync/hooks';
+import {
+  markNotificationRead as psMarkRead,
+  markAllNotificationsRead as psMarkAllRead,
+  deleteNotification as psDeleteNotification,
+} from '../../powersync/writes';
+import PendingSyncDot from '../../powersync/PendingSyncDot';
 
 const Notifications = () => {
-  const { user, token } = useAuthStore();
   const [filter, setFilter] = useState('all');
   const [searchTerm, setSearchTerm] = useState('');
   const [showSettings, setShowSettings] = useState(false);
-  const [selectedNotifications, setSelectedNotifications] = useState(new Set());
-  const [bulkActionMode, setBulkActionMode] = useState(false);
   const [pagination, setPagination] = useState({
     page: 1,
     limit: 20,
@@ -28,81 +30,47 @@ const Notifications = () => {
     totalItems: 0
   });
 
-  // Get state and actions from patient store
-  const {
-    notifications,
-    isLoading,
-    error,
-    fetchNotifications,
-    markNotificationAsRead,
-    markAllNotificationsAsRead,
-    deleteNotification
-  } = usePatientStore();
+  // Local-first read: when PowerSync is enabled this reads the encrypted local
+  // store (instant + offline); otherwise it transparently falls back to the
+  // existing online store fetch. Same data shape either way.
+  const { data: notifications, isLoading } = usePowerNotifications();
+  const error = null;
 
-  // Memoize the fetch function
-  const fetchData = useCallback(async () => {
-    if (!token) return;
-    try {
-      await fetchNotifications(token);
-    } catch (err) {
-      console.error('Error fetching notifications:', err);
-      toast.error('Failed to load notifications');
-    }
-  }, [token, fetchNotifications]);
-
-  // Fetch notifications only when component mounts or token changes
-  useEffect(() => {
-    let isMounted = true;
-    let timeoutId;
-
-    const loadData = async () => {
-      if (isMounted) {
-        await fetchData();
-      }
-    };
-
-    // Debounce the fetch call
-    timeoutId = setTimeout(loadData, 300);
-
-    return () => {
-      isMounted = false;
-      clearTimeout(timeoutId);
-    };
-  }, [fetchData]);
+  // The local-first hook self-loads (online fallback fetches internally), so no
+  // separate fetch effect is needed here.
 
   // Memoize handlers
+  // Writes go through the PowerSync-aware layer: optimistic local write + queued
+  // sync when offline; transparent online fallback when PowerSync is disabled.
   const handleMarkAsRead = useCallback(async (id) => {
-    if (!token) return;
     try {
-      await markNotificationAsRead(token, id);
+      await psMarkRead(id, true);
       toast.success('Marked as read');
     } catch (error) {
       console.error('Error marking notification as read:', error);
       toast.error('Could not mark as read');
     }
-  }, [token, markNotificationAsRead]);
+  }, []);
 
   const handleMarkAllAsRead = useCallback(async () => {
-    if (!token) return;
     try {
-      await markAllNotificationsAsRead(token);
+      await psMarkAllRead();
       toast.success('All notifications marked as read');
     } catch (error) {
       console.error('Error marking all notifications as read:', error);
       toast.error('Could not mark all as read');
     }
-  }, [token, markAllNotificationsAsRead]);
+  }, []);
 
   const handleDeleteNotification = useCallback(async (id) => {
-    if (!token) return;
     try {
-      await deleteNotification(token, id);
+      await psDeleteNotification(id);
       toast.success('Notification deleted');
     } catch (error) {
       console.error('Error deleting notification:', error);
       toast.error('Could not delete notification');
     }
-  }, [token, deleteNotification]);
+  }, []);
 
   // Memoize filter handlers
   const handleFilterChange = useCallback((newFilter) => {
@@ -395,7 +363,7 @@ const Notifications = () => {
           </div>
           <div className="text-center mt-6">
             <button
-              onClick={() => fetchData()}
+              onClick={() => window.location.reload()}
               className="inline-flex items-center px-4 py-2 border border-transparent rounded-md shadow-sm text-sm font-medium text-white bg-violet-600 hover:bg-violet-700"
             >
               <FiRefreshCw className="mr-2 -ml-1 h-5 w-5" /> Retry
@@ -605,6 +573,8 @@ const Notifications = () => {
                                 <p className="text-gray-500 text-sm">
                                   {formatNotificationTime(notification.createdAt)}
                                 </p>
+                                {/* Pending-sync indicator (offline write not yet uploaded). */}
+                                <PendingSyncDot table="notifications" id={notification._id || notification.id} variant="badge" />
                                 {notification.type && (
                                   <span className="inline-flex items-center px-2 py-1 rounded-md text-xs font-medium bg-gray-100 text-gray-600 capitalize">
                                     {notification.type}
@@ -680,6 +650,8 @@ const Notifications = () => {
                                 <p className="text-gray-500 text-sm">
                                   {formatNotificationTime(notification.createdAt)}
                                 </p>
+                                {/* Pending-sync indicator (offline write not yet uploaded). */}
+                                <PendingSyncDot table="notifications" id={notification._id || notification.id} variant="badge" />
                                 {notification.type && (
                                   <span className="inline-flex items-center px-2 py-1 rounded-md text-xs font-medium bg-gray-100 text-gray-600 capitalize">
                                     {notification.type}
@@ -755,6 +727,8 @@ const Notifications = () => {
                                 <p className="text-gray-500 text-sm">
                                   {formatNotificationTime(notification.createdAt)}
                                 </p>
+                                {/* Pending-sync indicator (offline write not yet uploaded). */}
+                                <PendingSyncDot table="notifications" id={notification._id || notification.id} variant="badge" />
                                 {notification.type && (
                                   <span className="inline-flex items-center px-2 py-1 rounded-md text-xs font-medium bg-gray-100 text-gray-600 capitalize">
                                     {notification.type}
@@ -830,6 +804,8 @@ const Notifications = () => {
                                 <p className="text-gray-500 text-sm">
                                   {formatNotificationTime(notification.createdAt)}
                                 </p>
+                                {/* Pending-sync indicator (offline write not yet uploaded). */}
+                                <PendingSyncDot table="notifications" id={notification._id || notification.id} variant="badge" />
                                 {notification.type && (
                                   <span className="inline-flex items-center px-2 py-1 rounded-md text-xs font-medium bg-gray-100 text-gray-600 capitalize">
                                     {notification.type}

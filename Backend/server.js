@@ -5,6 +5,7 @@ import path from "path";
 import { fileURLToPath } from "url";
 import connectDB, { connectAllDatabases } from "./DB/db.js";
 import authRoutes from "./routes/User/auth.routes.js";
+import aadhaarAuthRoutes from "./routes/User/aadhaarAuth.routes.js";
 import reportsRoutes from "./routes/User/reports.routes.js";
 import storageRoutes from "./routes/User/storage.routes.js";
 import notificationsRoutes from "./routes/User/notifications.routes.js";
@@ -32,6 +33,7 @@ import reportSharingRoutes from "./routes/User/reportSharing.routes.js";
 import familyVaultRoutes from "./routes/User/familyVault.routes.js";
 import paymentRoutes from "./routes/User/payment.routes.js";
 import mailjetTestRoutes from "./routes/test-mailjet.routes.js";
+import powersyncRoutes from "./routes/User/powersync.routes.js";
 
 // Define a simple logger
 const logger = {
@@ -130,6 +132,13 @@ async function startServer() {
       "X-Requested-With",
       "Accept",
       "Origin",
+      // Aadhaar auth flow: the frontend sends a device fingerprint on every
+      // request for backend device/risk checks, and optional captcha/attestation
+      // tokens. These custom headers must be whitelisted or the browser's CORS
+      // preflight blocks the request.
+      "x-device-id",
+      "x-device-fingerprint",
+      "x-captcha-token",
     ],
     optionsSuccessStatus: 204,
   };
@@ -150,6 +159,12 @@ async function startServer() {
   });
 
   // Register API routes
+  // NEW: Aadhaar-based patient auth (replaces the email/password patient flow).
+  // Mounted before the legacy /api/auth so it's the primary patient path.
+  app.use("/api/auth/aadhaar", aadhaarAuthRoutes);
+  // DEPRECATED: legacy email/password patient auth. Kept mounted temporarily so
+  // existing sessions/clients don't hard-break during migration. New patient
+  // registration should use /api/auth/aadhaar. Remove after client cutover.
   app.use("/api/auth", authRoutes);
   app.use("/api/reports", reportsRoutes);
   app.use("/api/storage", storageRoutes);
@@ -170,6 +185,7 @@ async function startServer() {
   app.use("/api/report-sharing", reportSharingRoutes); // Patient report sharing with doctors
   app.use("/api/family-vault", familyVaultRoutes); // Family Vault management
   app.use("/api/payment", paymentRoutes); // Razorpay payment gateway
+  app.use("/api/powersync", powersyncRoutes); // PowerSync token + offline write queue
   if (process.env.NODE_ENV !== "production") {
     app.use("/test-mailjet-email", mailjetTestRoutes); // Test-only Mailjet route
   }

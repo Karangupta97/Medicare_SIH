@@ -22,6 +22,9 @@ import RestoreButton from "./components/RestoreButton";
 import Dashboard from "./pages/User/Dashboard";
 import Login from "./pages/User/Login";
 import Signup from "./pages/User/Signup";
+// Aadhaar-based patient auth (replaces the email/password patient flow).
+import AadhaarLogin from "./pages/User/AadhaarLogin";
+import AadhaarRegister from "./pages/User/AadhaarRegister";
 import ForgotPassword from "./pages/User/ForgotPassword";
 import VerifyEmail from "./pages/User/VerifyEmail";
 import ResetPassword from "./pages/User/ResetPassword";
@@ -87,6 +90,7 @@ import PricingPage from "./pages/User/PricingPage";
 //components
 import Loading from "./components/Loading";
 import DashboardLayout from "./layouts/Patient/DashboardLayout";
+import PowerSyncProvider from "./powersync/PowerSyncProvider";
 
 
 const ProtectedRoute = ({ children }) => {
@@ -124,11 +128,30 @@ const RedirectAuthenticatedUser = ({ children }) => {
 };
 
 // Protected route specifically for founder
+// Blocks normal (patient) users from ever seeing any privileged area —
+// /founder/*, /staff/*, /doctor/* (including their login/signup pages). A
+// logged-in patient is sent to their own dashboard. Real founders/staff/doctors
+// (who are NOT logged in as a patient) pass through to their own flows.
+const BlockPrivilegedForPatients = ({ children }) => {
+  const { isAuthenticated: isPatientAuthenticated } = useAuthStore();
+  if (isPatientAuthenticated) {
+    return <Navigate to="/dashboard" replace />;
+  }
+  return children;
+};
+
 const FounderRoute = ({ children }) => {
   const { isAuthenticated, isLoading, checkAuth } = useFounderStore();
+  // A logged-in patient must never land on a founder page or be bounced to
+  // /founder/login — redirect them to their own dashboard instead.
+  const { isAuthenticated: isPatientAuthenticated } = useAuthStore();
   const navigate = useNavigate();
   const [authChecked, setAuthChecked] = useState(false);
   const [error, setError] = useState(null);
+
+  if (isPatientAuthenticated) {
+    return <Navigate to="/dashboard" replace />;
+  }
 
   useEffect(() => {
     // Check authentication status when the component mounts, but only once
@@ -186,9 +209,16 @@ const FounderRoute = ({ children }) => {
 const StaffRoute = ({ children }) => {
   const { isAuthenticated, staffData, isLoading, checkAuthStatus } =
     useStaffStore();
+  // A logged-in patient must never see a staff/admin page or be bounced to
+  // /staff/login — send them to their own dashboard.
+  const { isAuthenticated: isPatientAuthenticated } = useAuthStore();
   const navigate = useNavigate();
   const [authChecked, setAuthChecked] = useState(false);
   const [error, setError] = useState(null);
+
+  if (isPatientAuthenticated) {
+    return <Navigate to="/dashboard" replace />;
+  }
 
   useEffect(() => {
     // Check authentication status when the component mounts, but only once
@@ -258,9 +288,16 @@ const DoctorRoute = ({ children }) => {
     isCheckingAuth,
     checkAuthStatus,
   } = useDoctorStore();
+  // A logged-in patient must never see a doctor page or be bounced to
+  // /doctor/login — send them to their own dashboard.
+  const { isAuthenticated: isPatientAuthenticated } = useAuthStore();
   const navigate = useNavigate();
   const [authChecked, setAuthChecked] = useState(false);
   const [error, setError] = useState(null);
+
+  if (isPatientAuthenticated) {
+    return <Navigate to="/dashboard" replace />;
+  }
 
   useEffect(() => {
     // Check authentication status when the component mounts, but only once
@@ -314,9 +351,16 @@ const DoctorRoute = ({ children }) => {
   return children;
 };
 
-// Redirect authenticated doctor to dashboard
+// Redirect authenticated doctor to dashboard (and block logged-in patients from
+// ever seeing the doctor login/signup pages).
 const RedirectAuthenticatedDoctor = ({ children }) => {
   const { isAuthenticated, isCheckingAuth } = useDoctorStore();
+  const { isAuthenticated: isPatientAuthenticated } = useAuthStore();
+
+  // A logged-in patient must never see doctor pages.
+  if (isPatientAuthenticated) {
+    return <Navigate to="/dashboard" replace />;
+  }
 
   // If we're still checking authentication, show loading state
   if (isCheckingAuth) {
@@ -352,18 +396,28 @@ const App = () => {
       setIsLoading(true);
       try {
         if (location.pathname.startsWith("/founder")) {
-          // Skip the network check if the store already knows we're authenticated
-          // (e.g. immediately after OTP login navigates us here).
-          // FounderRoute will still do its own checkAuth on mount.
-          if (!isFounderAuthenticated) {
+          // A logged-in patient never gets founder access — the route guards
+          // redirect them to /dashboard, so skip the founder auth check entirely.
+          if (isAuthenticated) {
+            // no-op: patient will be redirected away from /founder/* by the guard
+          } else if (!isFounderAuthenticated) {
+            // Skip the network check if the store already knows we're authenticated
+            // (e.g. immediately after OTP login navigates us here).
+            // FounderRoute will still do its own checkAuth on mount.
             await checkFounderAuth();
           }
         } else if (location.pathname.startsWith("/staff")) {
-          if (!isStaffAuthenticated) {
+          // Logged-in patients are redirected away by the guard — skip the check.
+          if (isAuthenticated) {
+            // no-op: patient will be redirected away from /staff/* by the guard
+          } else if (!isStaffAuthenticated) {
             await checkStaffAuth();
           }
         } else if (location.pathname.startsWith("/doctor")) {
-          if (!isDoctorAuthenticated) {
+          // Logged-in patients are redirected away by the guard — skip the check.
+          if (isAuthenticated) {
+            // no-op: patient will be redirected away from /doctor/* by the guard
+          } else if (!isDoctorAuthenticated) {
             await checkDoctorAuth();
           }
         } else {
@@ -417,7 +471,12 @@ const App = () => {
             path="/dashboard"
             element={
               <ProtectedRoute>
-                <DashboardLayout />
+                {/* PowerSync (offline sidebar features) is mounted ONLY inside
+                    the authenticated dashboard — never around the Aadhaar auth
+                    flow. No-ops gracefully when PowerSync isn't configured. */}
+                <PowerSyncProvider>
+                  <DashboardLayout />
+                </PowerSyncProvider>
               </ProtectedRoute>
             }
           >
@@ -513,7 +572,16 @@ const App = () => {
           />
 
           {/* Founder Routes */}
-          <Route path="/founder/login" element={<FounderLogin />} />
+          {/* /founder/login is blocked for logged-in patients (they get sent to
+              their own dashboard, never the founder portal). */}
+          <Route
+            path="/founder/login"
+            element={
+              <BlockPrivilegedForPatients>
+                <FounderLogin />
+              </BlockPrivilegedForPatients>
+            }
+          />
           <Route
             path="/founder/dashboard"
             element={
@@ -557,9 +625,29 @@ const App = () => {
             }
           />
 
-          {/* Auth */}
+          {/* Auth — PRIMARY patient flow is now Aadhaar-based. /login and
+              /signup point to the Aadhaar flow; the legacy email/password pages
+              remain reachable at /login/email and /signup/email during
+              migration (documented replacement per the task intent). */}
           <Route
             path="/signup"
+            element={
+              <RedirectAuthenticatedUser>
+                <AadhaarRegister />
+              </RedirectAuthenticatedUser>
+            }
+          />
+          <Route
+            path="/login"
+            element={
+              <RedirectAuthenticatedUser>
+                <AadhaarLogin />
+              </RedirectAuthenticatedUser>
+            }
+          />
+          {/* DEPRECATED email/password patient auth (kept for migration). */}
+          <Route
+            path="/signup/email"
             element={
               <RedirectAuthenticatedUser>
                 <Signup />
@@ -567,7 +655,7 @@ const App = () => {
             }
           />
           <Route
-            path="/login"
+            path="/login/email"
             element={
               <RedirectAuthenticatedUser>
                 <Login />
@@ -584,11 +672,22 @@ const App = () => {
           />
           <Route path="/reset-password/:token" element={<ResetPassword />} />
           <Route path="/verify-email" element={<VerifyEmail />} />
-          {/* Staff Routes */}
-          <Route path="/staff/login" element={<StaffLogin />} />
+          {/* Staff Routes — login/forgot are blocked for logged-in patients. */}
+          <Route
+            path="/staff/login"
+            element={
+              <BlockPrivilegedForPatients>
+                <StaffLogin />
+              </BlockPrivilegedForPatients>
+            }
+          />
           <Route
             path="/staff/forgot-password"
-            element={<StaffForgotPassword />}
+            element={
+              <BlockPrivilegedForPatients>
+                <StaffForgotPassword />
+              </BlockPrivilegedForPatients>
+            }
           />
           <Route
             path="/staff/change-password"

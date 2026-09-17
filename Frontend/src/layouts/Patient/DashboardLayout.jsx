@@ -5,6 +5,7 @@ import debounce from 'lodash.debounce';
 import usericon from "../../assets/user.png";
 import MedicareLogo from "../../assets/Logo/Medicare logo 1.png";
 import HandLogo from "../../assets/Logo/hand logo.png";
+import SyncStatusBadge from "../../powersync/SyncStatusBadge";
 import {
   LayoutDashboard,
   Home,
@@ -1094,6 +1095,11 @@ const DashboardLayout = () => {
                       </motion.div>
                     )}
                   </AnimatePresence>
+                </div>
+                {/* PowerSync online/offline + sync status (hidden when PowerSync
+                    isn't configured). */}
+                <div className="hidden sm:flex items-center mr-1">
+                  <SyncStatusBadge />
                 </div>
                 {/* Ultra Modern Notifications with Gradient */}
                 <div className="relative notifications-menu">

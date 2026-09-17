@@ -129,6 +129,16 @@ export const getFeedbackDB = () => {
   return feedbackDB;
 };
 
+// Test-only seam: inject connections (e.g. an in-memory MongoDB) so unit /
+// integration tests can exercise the models without a real Atlas cluster. Never
+// used by production code paths.
+export const __setConnectionsForTests = (conns = {}) => {
+  if (conns.patientDB) patientDB = conns.patientDB;
+  if (conns.doctorDB) doctorDB = conns.doctorDB;
+  if (conns.managementDB) managementDB = conns.managementDB;
+  if (conns.feedbackDB) feedbackDB = conns.feedbackDB;
+};
+
 // Get appropriate database connection based on origin/context
 export const getDBConnection = (origin) => {
   // For now, we'll default to patient database for user-related operations

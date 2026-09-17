@@ -7,7 +7,9 @@
     "dev": "vite",
     "build": "vite build",
     "lint": "eslint .",
-    "preview": "vite preview"
+    "preview": "vite preview",
+    "test": "vitest run",
+    "test:watch": "vitest"
   },
   "dependencies": {
     "@emotion/react": "^11.11.0",
@@ -17,6 +19,8 @@
     "@mui/icons-material": "^5.15.0",
     "@mui/material": "^5.15.0",
     "@mui/x-date-pickers": "^8.3.1",
+    "@powersync/react": "^2.0.1",
+    "@powersync/web": "^2.3.1",
     "@react-hook/window-size": "^3.1.1",
     "@studio-freight/lenis": "^1.0.42",
     "@tailwindcss/aspect-ratio": "^0.4.2",
@@ -33,6 +37,7 @@
     "framer-motion": "^12.16.0",
     "html2canvas": "^1.4.1",
     "install": "^0.13.0",
+    "js-logger": "^1.6.1",
     "jspdf": "^3.0.1",
     "jspdf-autotable": "^5.0.2",
     "lodash": "^4.17.21",
@@ -62,8 +67,12 @@
   },
   "devDependencies": {
     "@eslint/js": "^9.25.0",
+    "@journeyapps/wa-sqlite": "^2.0.4",
     "@prerenderer/renderer-puppeteer": "^1.2.4",
     "@prerenderer/rollup-plugin": "^0.3.12",
+    "@testing-library/jest-dom": "^7.0.1",
+    "@testing-library/react": "^16.3.3",
+    "@testing-library/user-event": "^14.6.7",
     "@types/react": "^19.1.6",
     "@types/react-dom": "^19.1.5",
     "@vitejs/plugin-react": "^4.5.1",
@@ -72,9 +81,11 @@
     "eslint-plugin-react-hooks": "^5.2.0",
     "eslint-plugin-react-refresh": "^0.4.19",
     "globals": "^15.15.0",
+    "jsdom": "^30.0.1",
     "postcss": "^8.5.4",
     "rollup": "^4.41.1",
     "tailwindcss": "^4.1.8",
-    "vite": "^6.3.5"
+    "vite": "^6.3.5",
+    "vitest": "^2.1.9"
   }
 }
