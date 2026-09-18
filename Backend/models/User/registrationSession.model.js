@@ -50,6 +50,15 @@ const registrationSessionSchema = new mongoose.Schema(
     consent_at: { type: Date, default: null },
     consent_ip: { type: String, default: null },
 
+    // SEPARATE, OPTIONAL consent captured at the "set PIN" step: may the user's
+    // Aadhaar photo be reused as their APP profile picture? This is DISTINCT
+    // from the main KYC consent above (which authorizes the identity
+    // verification itself). Defaults to false so a missing/unchecked toggle
+    // never opts the user in. Recorded here for the short life of the session
+    // and audited independently when the account is created.
+    photo_profile_consent_flag: { type: Boolean, default: false },
+    photo_profile_consent_at: { type: Date, default: null },
+
     // Parked ENCRYPTED KYC fields (AES-256-GCM envelopes) after OTP success.
     // Present only once step === 'otp_verified'.
     encrypted_kyc: {

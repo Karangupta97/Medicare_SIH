@@ -8,25 +8,22 @@ import AadhaarInput from "../../components/auth/aadhaar/AadhaarInput";
 import CaptchaWidget from "../../components/auth/aadhaar/CaptchaWidget";
 import OtpInput from "../../components/auth/aadhaar/OtpInput";
 import PinPad from "../../components/auth/aadhaar/PinPad";
-import DeviceTrustPrompt from "../../components/auth/aadhaar/DeviceTrustPrompt";
 
 /**
- * Login flow orchestrator. Mirrors the registration page's transient-secret
- * discipline: the raw Aadhaar is kept in page state (needed across identify →
- * pin/otp so the backend can re-key the OKYC call and device checks), and is
- * cleared once login completes. PIN/OTP are handled + cleared inside children.
+ * Login flow orchestrator. The raw Aadhaar is kept in page state (needed across
+ * identify → pin/otp so the backend can re-key the OKYC call) and cleared once
+ * login completes. PIN/OTP are handled + cleared inside their child components.
  *
- * Step-up: if PIN login returns STEP_UP_REQUIRED (new device/risk), the store
- * moves us to the OTP step carrying the challengeId, and we show a clear reason.
- * After a successful new-device login we surface the DeviceTrustPrompt as a real
- * security moment.
+ * A correct PIN logs the user in directly — there is no device step-up (no
+ * forced OTP for "new" devices). Users can still deliberately choose the OTP
+ * sign-in method themselves.
  */
 const AadhaarLogin = () => {
   const navigate = useNavigate();
   const {
-    step, error, loading, otpExpiresAt, methods, stepUp,
+    step, error, loading, otpExpiresAt, methods,
     startLogin, submitLoginAadhaar, chooseMethod, submitLoginPin,
-    requestLoginOtp, submitLoginOtp, acknowledgeDevice, resetFlow, clearError,
+    requestLoginOtp, submitLoginOtp, resetFlow, clearError,
   } = useAadhaarAuthStore();
 
   const [aadhaar, setAadhaar] = useState("");
@@ -189,32 +186,12 @@ const AadhaarLogin = () => {
       )}
 
       {step === Steps.LOGIN_OTP && (
-        <>
-          {stepUp && (
-            <p className="mb-3 rounded-lg bg-amber-50 px-3 py-2 text-xs text-amber-700">
-              This looks like a new device, so we've sent a one-time code to your
-              Aadhaar-linked mobile for extra security.
-            </p>
-          )}
-          <OtpInput
-            expiresAt={otpExpiresAt}
-            loading={loading}
-            onSubmit={onSubmitOtp}
-            onResend={onResendOtp}
-            statusNote={underProcess ? "Still processing — you can retry in a moment." : null}
-          />
-        </>
-      )}
-
-      {step === Steps.LOGIN_DEVICE_TRUST && (
-        <DeviceTrustPrompt
-          onAcknowledge={() => {
-            acknowledgeDevice();
-          }}
-          onReviewSessions={() => {
-            acknowledgeDevice();
-            navigate("/dashboard/settings");
-          }}
+        <OtpInput
+          expiresAt={otpExpiresAt}
+          loading={loading}
+          onSubmit={onSubmitOtp}
+          onResend={onResendOtp}
+          statusNote={underProcess ? "Still processing — you can retry in a moment." : null}
         />
       )}
 

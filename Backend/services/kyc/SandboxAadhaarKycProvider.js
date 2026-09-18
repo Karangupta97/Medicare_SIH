@@ -135,8 +135,13 @@ export class SandboxAadhaarKycProvider extends AadhaarKycProvider {
       // Some deployments signal source problems in the message body.
       const msg = (data.message || resp.data?.message || "").toString();
       if (/source.*unavailable|try again/i.test(msg)) {
+        console.error(`[SandboxKYC] generateOtp source-unavailable body: message="${msg.slice(0, 200)}"`);
         return { status: "source_unavailable", retryable: true, providerMessage: msg };
       }
+      console.error(
+        `[SandboxKYC] generateOtp: no reference_id in response. message="${msg.slice(0, 200)}" ` +
+        `keys=${Object.keys(data).join(",")}`
+      );
       return { status: "error", retryable: true, providerMessage: msg || "no_reference_id" };
     } catch (err) {
       return this._mapAxiosError(err);
@@ -192,8 +197,10 @@ export class SandboxAadhaarKycProvider extends AadhaarKycProvider {
         return { status: "under_process", retryable: true, retryAfterMs: 3000, providerMessage: statusStr };
       }
       if (/source.*unavailable/i.test(statusStr)) {
+        console.error(`[SandboxKYC] verify returned source-unavailable body: status="${statusStr.slice(0, 200)}"`);
         return { status: "source_unavailable", retryable: true, providerMessage: statusStr };
       }
+      console.error(`[SandboxKYC] verify returned unmapped status: status="${statusStr.slice(0, 200)}"`);
       return { status: "error", retryable: false, providerMessage: statusStr || "unknown" };
     } catch (err) {
       return this._mapAxiosError(err);
@@ -232,6 +239,15 @@ export class SandboxAadhaarKycProvider extends AadhaarKycProvider {
 
   _mapAxiosError(err) {
     const httpStatus = err.response?.status;
+    // Non-PII diagnostic: surface the provider's HTTP status + short message to
+    // the server logs so 503/auth issues are debuggable. We log ONLY the status
+    // and a trimmed provider message — never the Aadhaar, OTP, or KYC payload.
+    const providerMsg = (err.response?.data?.message || err.code || err.message || "")
+      .toString()
+      .slice(0, 200);
+    console.error(
+      `[SandboxKYC] verify/generate request failed: httpStatus=${httpStatus ?? "none"} providerMessage="${providerMsg}"`
+    );
     // 503 Source Unavailable — clear retry-later, never silent failure.
     if (httpStatus === 503) {
       return { status: "source_unavailable", retryable: true, providerMessage: "http_503" };

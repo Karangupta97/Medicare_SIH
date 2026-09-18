@@ -54,16 +54,22 @@ export const getPowerSyncToken = async (req, res) => {
     }
 
     const now = Math.floor(Date.now() / 1000);
+    // PowerSync's HS256 config stores the secret Base64URL-encoded and verifies
+    // JWTs using the DECODED bytes as the HMAC key. So we decode the same
+    // Base64URL string here before signing — this way the exact same value goes
+    // in .env (POWERSYNC_JWT_SECRET) AND the PowerSync dashboard's Client Auth,
+    // and both sides use identical key bytes. (jsonwebtoken accepts a Buffer.)
+    const keyBytes = Buffer.from(secret, "base64url");
     const token = jwt.sign(
       {
         // PowerSync uses `sub` as the user identity → passed to sync rules as
-        // token_parameters.user_id. This is what scopes buckets per user.
+        // request.user_id() / token_parameters. This scopes buckets per user.
         sub: String(userId),
         iat: now,
         exp: now + JWT_TTL,
         aud: audience,
       },
-      secret,
+      keyBytes,
       {
         algorithm: "HS256",
         keyid: process.env.POWERSYNC_JWT_KID || "medicare-powersync-hs256",

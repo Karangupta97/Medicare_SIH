@@ -31,7 +31,7 @@ beforeEach(() => {
 });
 
 describe("login state machine", () => {
-  it("STEP_UP_REQUIRED from PIN redirects to the OTP step with a challenge", async () => {
+  it("a correct PIN logs in directly (no device step-up)", async () => {
     store().startLogin();
     api.loginIdentify.mockResolvedValue({ success: true, methods: ["pin", "otp"] });
     await store().submitLoginAadhaar({ aadhaarNumber: "234567890123" });
@@ -40,29 +40,28 @@ describe("login state machine", () => {
     store().chooseMethod("pin");
     expect(store().step).toBe(Steps.LOGIN_PIN);
 
-    // PIN succeeds but backend demands step-up (new device).
+    // Correct PIN → straight to authenticated + DONE, regardless of device.
     api.loginWithPin.mockResolvedValue({
       success: true,
-      code: "STEP_UP_REQUIRED",
-      stepUp: true,
-      challengeId: "chal-123",
+      user: { id: "u1", umid: "AB12345CD", status: "active" },
+      accessToken: "a",
+      refreshToken: "r",
     });
     const res = await store().submitLoginPin({ aadhaarNumber: "234567890123", pin: "428173" });
 
-    expect(res.code).toBe("STEP_UP_REQUIRED");
-    expect(store().step).toBe(Steps.LOGIN_OTP);
-    expect(store().stepUp).toBe(true);
-    expect(store().challengeId).toBe("chal-123");
+    expect(res.ok).toBe(true);
+    expect(store().status).toBe("authenticated");
+    expect(store().step).toBe(Steps.DONE);
   });
 
-  it("new-device OTP success surfaces the device-trust step before DONE", async () => {
+  it("deliberate OTP login completes straight to DONE", async () => {
     store().startLogin();
-    // Arrive at OTP via step-up.
     api.loginIdentify.mockResolvedValue({ success: true, methods: ["pin", "otp"] });
     await store().submitLoginAadhaar({ aadhaarNumber: "234567890123" });
-    store().chooseMethod("pin");
-    api.loginWithPin.mockResolvedValue({ success: true, stepUp: true, challengeId: "chal-1" });
-    await store().submitLoginPin({ aadhaarNumber: "234567890123", pin: "428173" });
+    store().chooseMethod("otp");
+    api.loginRequestOtp.mockResolvedValue({ success: true, challengeId: "chal-1" });
+    await store().requestLoginOtp({ aadhaarNumber: "234567890123" });
+    expect(store().step).toBe(Steps.LOGIN_OTP);
 
     api.loginVerifyOtp.mockResolvedValue({
       success: true,
@@ -73,8 +72,6 @@ describe("login state machine", () => {
     await store().submitLoginOtp({ otp: "654987" });
 
     expect(store().status).toBe("authenticated");
-    expect(store().step).toBe(Steps.LOGIN_DEVICE_TRUST);
-    store().acknowledgeDevice();
     expect(store().step).toBe(Steps.DONE);
   });
 

@@ -42,6 +42,13 @@ const auditLogSchema = new mongoose.Schema(
         "step_up_triggered",
         "pii_access",
         "kyc_provider_error",
+        // Separate, explicit consent for reusing the Aadhaar photo as the app
+        // profile picture (captured at the set-PIN step). Distinct from the
+        // main KYC/account-creation consent.
+        "profile_photo_consent",
+        // User-initiated profile-picture changes (change/remove) after
+        // registration. These only ever touch users.photoURL, never the KYC copy.
+        "profile_photo_updated",
       ],
       index: true,
     },

@@ -36,6 +36,9 @@ const AadhaarRegister = () => {
   const [consent, setConsent] = useState(false);
   const [captchaToken, setCaptchaToken] = useState(null);
   const [underProcess, setUnderProcess] = useState(false);
+  // SEPARATE, OPTIONAL consent (default OFF): reuse the Aadhaar photo as the
+  // app profile picture. Distinct from the KYC consent captured on Step A.
+  const [usePhotoAsProfile, setUsePhotoAsProfile] = useState(false);
 
   // Enter the register flow on mount; clean up transient secrets on unmount.
   useEffect(() => {
@@ -144,12 +147,35 @@ const AadhaarRegister = () => {
       )}
 
       {step === Steps.REG_PIN && (
-        <PinPad
-          mode="set"
-          loading={loading}
-          onSubmit={(pin) => submitRegistrationPin({ pin })}
-          subtitle="6 digits. Avoid sequences (123456) or repeats (111111)."
-        />
+        <>
+          <PinPad
+            mode="set"
+            loading={loading}
+            onSubmit={(pin) => submitRegistrationPin({ pin, usePhotoAsProfile })}
+            subtitle="6 digits. Avoid sequences (123456) or repeats (111111)."
+          />
+
+          {/* Separate, explicit, default-OFF consent to reuse the Aadhaar photo
+              as the profile picture. Kept distinct from the KYC consent. */}
+          <div className="mt-5 flex items-start gap-3 rounded-[12px] border border-[#E0E5F2] bg-[#F4F7FE] p-3.5">
+            <input
+              id="use-aadhaar-photo"
+              type="checkbox"
+              checked={usePhotoAsProfile}
+              disabled={loading}
+              onChange={(e) => setUsePhotoAsProfile(e.target.checked)}
+              className="mt-0.5 h-4 w-4 rounded border-[#707EAE]/40 text-[#4318FF] focus:ring-[#4318FF]"
+            />
+            <label
+              htmlFor="use-aadhaar-photo"
+              className="text-[12px] sm:text-[13px] leading-relaxed text-[#707EAE]"
+            >
+              Use your Aadhaar photo as your profile picture? You can change or
+              remove it anytime in your profile settings. Leave this off to start
+              with a default avatar.
+            </label>
+          </div>
+        </>
       )}
 
       {step === Steps.REG_SUCCESS && (

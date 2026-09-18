@@ -1,9 +1,7 @@
 import React, { useState, useEffect } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import { Link } from "react-router-dom";
-import { toast } from "react-hot-toast";
-import { useAuthStore } from "../../store/Patient/authStore";
-import usePatientStore from "../../store/Patient/patientstore";
+import { usePrescriptions } from "../../powersync/hooks";
 import PrescriptionCard from "../../components/User/DigitalPrescriptionCard";
 import { 
   FiFileText, FiSearch, FiFilter, FiCalendar, 
@@ -14,34 +12,21 @@ import {
 } from "react-icons/fi";
 
 const AllDigitalPrescriptions = () => {
-  const { user, token } = useAuthStore();
-  const { 
-    prescriptions,
-    isLoading,
-    error,
-    fetchPrescriptions
-  } = usePatientStore();  const [filteredPrescriptions, setFilteredPrescriptions] = useState([]);
+  // Local-first READ from the `user_prescriptions` PowerSync bucket. Prescriptions
+  // are issued by doctors and are READ-ONLY from the patient side, so there are
+  // no writes here — just an offline-capable read (falls back to the online
+  // store when PowerSync is disabled). The hook self-loads; no blocking fetch.
+  const { data: prescriptions, isLoading } = usePrescriptions();
+  const error = null;
+
+  const [filteredPrescriptions, setFilteredPrescriptions] = useState([]);
   const [searchTerm, setSearchTerm] = useState("");
   const [selectedFilter, setSelectedFilter] = useState("all");
   const [viewMode, setViewMode] = useState("grid"); // "grid" or "list"
   const [sortBy, setSortBy] = useState("newest"); // "newest", "oldest", "doctor", "hospital"
   const [showFilters, setShowFilters] = useState(false);
 
-  // Fetch prescriptions from store
-  useEffect(() => {
-    const loadPrescriptions = async () => {
-      try {
-        await fetchPrescriptions(token);
-      } catch (err) {
-        console.error("Error fetching prescriptions:", err);
-        toast.error("An error occurred while fetching prescriptions");
-      }
-    };
-
-    if (token) {
-      loadPrescriptions();
-    }
-  }, [token, fetchPrescriptions]);  // Filter prescriptions when search term or filter changes
+  // Filter prescriptions when search term or filter changes
   useEffect(() => {
     if (!prescriptions.length) {
       setFilteredPrescriptions([]);

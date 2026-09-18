@@ -1,6 +1,7 @@
 import jwt from "jsonwebtoken";
 import { getDeviceSessionModel } from "../../models/User/deviceSession.model.js";
 import { getDBConnection } from "../../DB/db.js";
+import { getCachedBlacklist, setCachedBlacklist } from "./blacklistCache.js";
 
 export const verifyToken = async (req, res, next) => {
   // Check for token in Authorization header
@@ -30,11 +31,31 @@ export const verifyToken = async (req, res, next) => {
   console.log('Raw token before verification:', token);
 
   try {
-    // Check if token is blacklisted first
-    const dbConnection = getDBConnection(req.get('origin'));
-    const DeviceSession = getDeviceSessionModel(dbConnection);
-    
-    const isBlacklisted = await DeviceSession.isTokenBlacklisted(token);
+    // Check if token is blacklisted first — with a short-TTL cache so a
+    // transient MongoDB/Atlas blip doesn't cascade into failing EVERY request.
+    let isBlacklisted = getCachedBlacklist(token);
+    if (isBlacklisted === undefined) {
+      // Cache miss → consult the DB, then cache the result for the TTL window.
+      try {
+        const dbConnection = getDBConnection(req.get('origin'));
+        const DeviceSession = getDeviceSessionModel(dbConnection);
+        isBlacklisted = await DeviceSession.isTokenBlacklisted(token);
+        setCachedBlacklist(token, isBlacklisted);
+      } catch (dbErr) {
+        // DB unreachable (e.g. Atlas connectivity blip). Rather than failing the
+        // request, fall back to the last known cached value; if we've never
+        // seen this token, fail OPEN (treat as not-blacklisted) so a brief
+        // outage doesn't lock everyone out. The JWT signature is still verified
+        // below, so this only skips the revocation check during the outage.
+        console.warn(
+          "[verifyToken] blacklist DB check failed; using resilient fallback:",
+          dbErr.message
+        );
+        const cached = getCachedBlacklist(token);
+        isBlacklisted = cached === undefined ? false : cached;
+      }
+    }
+
     if (isBlacklisted) {
       console.log('Token is blacklisted');
       return res.status(401).json({

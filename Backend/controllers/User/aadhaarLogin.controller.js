@@ -135,34 +135,10 @@ export const loginWithPin = async (req, res) => {
     user.failed_pin_attempts = 0;
     user.pin_locked_until = null;
 
-    // STEP 3 — device/risk check + step-up.
-    const known = user.known_devices?.some((d) => d.fingerprint === fp);
-    if (!known) {
-      // Unknown device: require OTP step-up even though PIN succeeded, and send
-      // a login notification. We start an OTP challenge tied to THIS account.
-      await user.save();
-      // Step-up needs to call the OKYC generate endpoint, which requires the raw
-      // Aadhaar number. It's already in-request (the PIN login submitted it), so
-      // we forward it explicitly — never persisted.
-      const challenge = await startOtpChallenge(user, { ip, fp, purpose: "step_up", rawAadhaar: String(aadhaarNumber) });
-      await logEvent("step_up_triggered", {
-        userId: user._id, ip, deviceFingerprint: fp, reason: "unknown_device_pin_login",
-      });
-      // NOTE: real deployment sends an SMS/push login alert here via the
-      // encrypted mobile on the kyc_profile (never the Aadhaar number).
-      if (!challenge.ok) {
-        return res.status(challenge.httpStatus || 502).json({ success: false, message: challenge.message });
-      }
-      return res.status(200).json({
-        success: true,
-        code: "STEP_UP_REQUIRED",
-        message: "For your security, verify with the OTP sent to your Aadhaar-linked mobile.",
-        challengeId: challenge.challengeId,
-        stepUp: true,
-      });
-    }
-
-    // Known device: record activity + issue session directly.
+    // Device step-up has been intentionally REMOVED: a correct PIN logs the user
+    // in directly on any device (no forced OTP for "new" devices). We still
+    // record the device for informational purposes (future device list), but it
+    // never gates login.
     touchDevice(user, fp);
     await user.save();
     return finalizeLogin(res, user, { ip, fp, req, method: "pin", stepUp: false });
@@ -259,7 +235,7 @@ export const loginOtpGenerate = async (req, res) => {
       });
     }
 
-    const challenge = await startOtpChallenge(user, { ip, fp, purpose: "login", rawAadhaar: String(aadhaarNumber) });
+    const challenge = await startOtpChallenge(user, { ip, fp, rawAadhaar: String(aadhaarNumber) });
     if (!challenge.ok) {
       await padResponseTime(start, 1200);
       return res.status(challenge.httpStatus || 502).json({ success: false, message: challenge.message });
@@ -342,7 +318,7 @@ export const loginOtpVerify = async (req, res) => {
     await user.save();
     await RegSession.deleteOne({ _id: challenge._id });
 
-    return finalizeLogin(res, user, { ip, fp, req, method: "otp", stepUp: challenge.step_up === true });
+    return finalizeLogin(res, user, { ip, fp, req, method: "otp", stepUp: false });
   } catch (err) {
     console.error("[loginOtpVerify] error:", err.message);
     return res.status(500).json({ success: false, message: GENERIC_TRY_LATER });
@@ -410,10 +386,10 @@ export const logoutEverywhere = async (req, res) => {
 /* ------------------------------------------------------------------ helpers */
 
 /**
- * Start an OTP challenge tied to an existing account (login or step-up). Stores
- * a RegistrationSession row reused as the challenge record.
+ * Start an OTP challenge tied to an existing account (the deliberate OTP login
+ * path). Stores a RegistrationSession row reused as the challenge record.
  */
-async function startOtpChallenge(user, { ip, fp, purpose, rawAadhaar }) {
+async function startOtpChallenge(user, { ip, fp, rawAadhaar }) {
   const provider = getKycProvider();
   // The OKYC generate endpoint is keyed by the raw Aadhaar number, which we
   // never store. Callers that reach here always have the number in-request
@@ -429,7 +405,7 @@ async function startOtpChallenge(user, { ip, fp, purpose, rawAadhaar }) {
 
   const result = await provider.generateOtp(String(rawAadhaar), {
     consent: "Y",
-    reason: purpose === "step_up" ? "Step-up login verification" : "Patient login verification",
+    reason: "Patient login verification",
   });
   if (result.status !== "otp_sent") {
     await logEvent("kyc_provider_error", {
@@ -458,7 +434,6 @@ async function startOtpChallenge(user, { ip, fp, purpose, rawAadhaar }) {
     ip_address: ip,
     device_fingerprint: fp,
     user_ref: user._id,
-    step_up: purpose === "step_up",
     expires_at: new Date(Date.now() + ttl * 1000),
   });
   await logEvent("otp_generated", {

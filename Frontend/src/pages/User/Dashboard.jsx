@@ -38,55 +38,40 @@ import { useAuthStore } from "../../store/Patient/authStore";
 import { toast } from "react-hot-toast";
 import usePatientStore from "../../store/Patient/patientstore";
 import { getStorageLimitForPlan, getStorageLimitLabel } from "../../config/planConfig";
+// Local-first data: reads PowerSync's local DB when offline, falls back to the
+// online store when PowerSync is disabled. Same shape either way.
+import { useDashboardData } from "../../powersync/hooks";
 
 const Dashboard = () => {
   const { user, token } = useAuthStore();
+  // Store actions still used for notification mutations, report viewing, and the
+  // (online-only) websocket refresh handler.
+  const {
+    markNotificationAsRead,
+    markAllNotificationsAsRead,
+    handleViewReport,
+    fetchNotifications,
+  } = usePatientStore();
+
+  // Local-first reads. These load instantly from the local encrypted DB (works
+  // fully offline) and self-fetch online when PowerSync isn't enabled — so the
+  // dashboard never hangs on a network call when you're offline.
   const {
     reports,
     prescriptions,
     notifications,
-    isLoading,  
-    error,
-    fetchReports,
-    fetchPrescriptions,
-    fetchNotifications,
-    markNotificationAsRead,
-    markAllNotificationsAsRead,
-    handleViewReport
-  } = usePatientStore();
+    isLoading,
+  } = useDashboardData();
+  const error = null;
 
-  const [isInitialLoad, setIsInitialLoad] = useState(true);
   const [isQRCodeModalOpen, setIsQRCodeModalOpen] = useState(false);
   const [isProfilePhotoModalOpen, setIsProfilePhotoModalOpen] = useState(false);
 
-  // Initial data fetch with token check
-  useEffect(() => {
-    if (token) {
-      const loadInitialData = async () => {
-        try {
-          if (!token) {
-            console.log("No token available, waiting for authentication...");
-            return;
-          }
-
-          setIsInitialLoad(true);
-          // Load only data required on this screen to avoid unnecessary API calls.
-          await Promise.all([
-            fetchReports(token),
-            fetchPrescriptions(token),
-            fetchNotifications(token),
-          ]);
-        } catch (error) {
-          console.error("Error loading dashboard data:", error);
-          toast.error("Unable to load dashboard data. Please try again later.");
-        } finally {
-          setIsInitialLoad(false);
-        }
-      };
-
-      loadInitialData();
-    }
-  }, [token, fetchReports, fetchPrescriptions, fetchNotifications]);
+  // NOTE: data loading is handled by the local-first useDashboardData() hook
+  // above — it reads the local PowerSync DB (offline-capable) and self-fetches
+  // online when PowerSync is disabled. We intentionally do NOT block the page on
+  // a network Promise.all here (that caused the dashboard to hang forever when
+  // offline).
 
   // Handler for opening profile photo modal
   const handleProfilePhotoClick = () => { 
@@ -1834,17 +1819,19 @@ const Dashboard = () => {
     </div>
   );
 
-  // Enhanced loading state
-  if (isLoading || isInitialLoad) {
+  // Loading state: only show the spinner while genuinely loading AND we have no
+  // data yet. Offline, the local-first hook returns instantly with cached data
+  // (or empty arrays), so the dashboard renders rather than hanging forever.
+  const hasAnyData =
+    (reports && reports.length) ||
+    (prescriptions && prescriptions.length) ||
+    (notifications && notifications.length);
+  if (isLoading && !hasAnyData) {
     return (
       <div className="max-w-7xl mx-auto py-6 px-4 sm:px-6 lg:px-8">
         <div className="flex flex-col items-center justify-center h-64">
           <div className="animate-spin rounded-full h-16 w-16 border-t-2 border-b-2 border-blue-500 mb-4"></div>
-          <p className="text-gray-500">
-            {isInitialLoad
-              ? "Initializing your dashboard..."
-              : "Loading your dashboard..."}
-          </p>
+          <p className="text-gray-500">Loading your dashboard...</p>
         </div>
       </div>
     );

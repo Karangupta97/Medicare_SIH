@@ -23,6 +23,7 @@ import {
 import { toast } from "react-hot-toast";
 import { useAuthStore } from "../../store/Patient/authStore";
 import usePatientStore from "../../store/Patient/patientstore";
+import { useSharedReports, useIsOnline } from "../../powersync/hooks";
 
 /* ───────── constants ───────── */
 const STATUS_CONFIG = {
@@ -97,8 +98,12 @@ const getDuration = (dur) => {
 /* ═══════════════════════════════════════════════════════════════════ */
 const SharedReportsManager = () => {
   const { token, isAuthenticated } = useAuthStore();
-  const { sharedReports, sharedReportsLoading, fetchMyShares, revokeShare, fetchShareAccessLog } =
-    usePatientStore();
+  // Local-first READ from the `user_shared_reports` bucket (offline-capable;
+  // falls back to the online store when PowerSync is disabled). Revoke + access
+  // log are inherently-online actions handled via the store below.
+  const { data: sharedReports, isLoading: sharedReportsLoading } = useSharedReports();
+  const { fetchMyShares, revokeShare, fetchShareAccessLog } = usePatientStore();
+  const online = useIsOnline();
   const navigate = useNavigate();
 
   const [expandedShare, setExpandedShare] = useState(null);
@@ -109,15 +114,15 @@ const SharedReportsManager = () => {
   const [selectedShareIds, setSelectedShareIds] = useState([]);
   const [bulkRevoking, setBulkRevoking] = useState(false);
 
+  // Auth guard only — the list loads via useSharedReports() (no network block).
   useEffect(() => {
     if (!isAuthenticated) {
       navigate("/login");
-      return;
     }
-    fetchMyShares(token);
-  }, [isAuthenticated, token, fetchMyShares, navigate]);
+  }, [isAuthenticated, navigate]);
 
-  /* toggle expand + lazy-load access log */
+  /* toggle expand + lazy-load access log (requires network — access log is not
+     synced offline) */
   const handleToggleExpand = async (shareId) => {
     if (expandedShare === shareId) {
       setExpandedShare(null);
@@ -125,12 +130,22 @@ const SharedReportsManager = () => {
     }
     setExpandedShare(shareId);
     if (!accessLogs[shareId]) {
+      if (!online) {
+        // Access log is a live-only detail; don't retry-loop when offline.
+        setAccessLogs((p) => ({ ...p, [shareId]: [] }));
+        return;
+      }
       const result = await fetchShareAccessLog(token, shareId);
       if (result?.success) setAccessLogs((p) => ({ ...p, [shareId]: result.accessLog }));
     }
   };
 
   const handleRevoke = async (shareId) => {
+    // Revoking access must reach the backend (auth + live share state) — gate it.
+    if (!online) {
+      toast.error("Revoking access requires an internet connection.");
+      return;
+    }
     setRevoking(true);
     try {
       await revokeShare(token, shareId);
@@ -190,6 +205,10 @@ const SharedReportsManager = () => {
     const idsToRevoke = selectedActiveShareIds;
     if (idsToRevoke.length === 0) {
       toast.error("Only Active shares can be revoked");
+      return;
+    }
+    if (!online) {
+      toast.error("Revoking access requires an internet connection.");
       return;
     }
 
@@ -268,7 +287,13 @@ const SharedReportsManager = () => {
           </div>
 
           <button
-            onClick={() => fetchMyShares(token)}
+            onClick={() => {
+              if (!online) {
+                toast.error("Refresh requires an internet connection.");
+                return;
+              }
+              fetchMyShares(token);
+            }}
             disabled={sharedReportsLoading}
             className="self-start sm:self-auto flex items-center gap-2 px-4 py-2.5 rounded-xl text-sm font-semibold transition-all duration-300 hover:scale-[1.03] active:scale-[0.97]"
             style={{

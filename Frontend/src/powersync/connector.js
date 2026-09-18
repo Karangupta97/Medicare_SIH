@@ -82,3 +82,9 @@ export class MedicareBackendConnector {
     }
   }
 }
+
+// Alias matching the name used in the PowerSync setup wizard / docs examples
+// (`new Connector()`). This is the SAME connector as MedicareBackendConnector —
+// it fetches a real per-user JWT from the backend token endpoint rather than a
+// hardcoded development token, and fully implements uploadData.
+export { MedicareBackendConnector as Connector };

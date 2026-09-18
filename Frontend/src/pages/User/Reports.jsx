@@ -33,6 +33,7 @@ import {
 import { toast } from "react-hot-toast";
 import { useAuthStore } from "../../store/Patient/authStore";
 import usePatientStore from "../../store/Patient/patientstore";
+import { useReports } from "../../powersync/hooks";
 import { useDropzone } from "react-dropzone";
 import StorageLimitModal from "../../components/StorageLimitModal";
 import ReportAnalysisModal from "../../components/ReportAnalysisModal";
@@ -667,12 +668,14 @@ const Reports = () => {
   const [imageUrlOverrides, setImageUrlOverrides] = useState({});
   const refreshAttemptsRef = useRef(new Map());
 
-  // Get state and actions from patient store
+  // Local-first READ from the `user_reports` PowerSync bucket (offline-capable;
+  // falls back to the online store when PowerSync is disabled). WRITE actions
+  // (upload/delete/move/analyze) still come from the store below.
+  const { data: reports, isLoading } = useReports();
+
+  // Write actions + report-URL refresh still go through the existing store.
   const {
-    reports,
-    isLoading,
     error,
-    fetchReports,
     uploadReport,
     deleteReport,
     moveReport,
@@ -682,14 +685,14 @@ const Reports = () => {
     setReportEmergencyFolder,
   } = usePatientStore();
 
+  // Only guard authentication here — data loading is handled by useReports()
+  // (which reads the local store and never blocks/loops on the network offline).
   useEffect(() => {
     if (!isAuthenticated) {
       toast.error("Please login to view your reports");
       navigate("/login");
-      return;
     }
-    fetchReports(token);
-  }, [isAuthenticated, navigate, token, fetchReports]);
+  }, [isAuthenticated, navigate]);
 
   // Handle specific report navigation from search results
   useEffect(() => {

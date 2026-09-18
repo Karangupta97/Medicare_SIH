@@ -1,4 +1,5 @@
 import { SandboxAadhaarKycProvider } from "./SandboxAadhaarKycProvider.js";
+import { MockAadhaarKycProvider } from "./MockAadhaarKycProvider.js";
 
 /**
  * KYC provider factory — the single adapter seam.
@@ -19,6 +20,11 @@ export function getKycProvider() {
   switch (which) {
     case "sandbox":
       _instance = new SandboxAadhaarKycProvider();
+      break;
+    // Local dev/testing only: deterministic, offline provider. Selected via
+    // AADHAAR_KYC_PROVIDER=mock. Never use in production.
+    case "mock":
+      _instance = new MockAadhaarKycProvider();
       break;
     // Future:
     // case "digilocker":

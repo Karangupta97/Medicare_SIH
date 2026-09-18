@@ -1,155 +1,110 @@
 # =============================================================================
 # PowerSync Sync Rules — Medicare offline dashboard
 # =============================================================================
-# These rules run on the PowerSync SERVICE (Cloud or self-hosted). They define
-# which MongoDB documents each authenticated user receives in their local
-# SQLite database. Upload this file in the PowerSync dashboard (or mount it in
-# the self-hosted config).
+# Scopes each authenticated user's MongoDB documents into their local SQLite DB.
+# Identity: the client JWT `sub` = the user's Mongo _id, exposed as
+# request.user_id(). Every bucket is scoped to it → no cross-user PHI locally.
 #
-# IDENTITY: the client JWT (minted by GET /api/powersync/token) carries `sub` =
-# the user's Mongo _id. PowerSync exposes it as `token_parameters.user_id` (we
-# alias it below). EVERY bucket is scoped to this id, so a user can NEVER sync
-# another user's data — no cross-user PHI in local storage.
+# IMPORTANT SYNTAX NOTES (learned from the validator):
+#  - PowerSync SQL LOWER-CASES unquoted identifiers. All camelCase Mongo fields
+#    (userId, patientId, createdAt, s3Key, planType, ...) MUST be DOUBLE-QUOTED
+#    or they won't match, e.g. "userId" not userId.
+#  - Array-membership (members[*].userId) is NOT valid in a parameter query, so
+#    the "member-of-a-vault" case is handled by a token parameter + a data query
+#    that matches the embedded members array via the JSON operator instead.
 #
-# MULTI-DATABASE NOTE: this app splits collections across Mongo databases:
-#   - Patient DB: users, reports, notifications, reportshares, familyvaults,
-#     familyvaultinvites, medicalinfos
-#   - Doctor DB:  prescriptions
-# PowerSync's MongoDB connector targets ONE database per instance. Because the
-# base MONGODB_URI differs only by db name, configure the connector against the
-# Patient DB and add the Doctor DB as documented in powersync/README.md
-# (either a second PowerSync instance/connector for `prescriptions`, or
-# consolidate prescriptions into the Patient DB). The `prescriptions` bucket
-# below is written as if reachable; see README for the two supported options.
+# MULTI-DB: this instance's connector targets the Patient DB. `prescriptions`
+# lives in the Doctor DB and is therefore intentionally NOT synced here (the
+# client falls back to online for prescriptions). To add it, run a second
+# PowerSync instance against the Doctor DB (see powersync/README.md).
 #
-# STORAGE / QUOTA: we sync METADATA ONLY. No file blobs are synced offline.
-# Reports carry s3Key/fileSize/contentType (needed to render lists + compute the
-# local storage quota) but the actual file is lazy-fetched online on demand
-# (with a per-report "available offline" opt-in handled client-side).
-#
-# CONFLICTS: last-write-wins for reports/notifications. Prescriptions, family
-# vault, and emergency-derived data are read-only from the patient client
-# (the backend /write endpoint rejects client writes to them → server wins).
+# STORAGE: metadata only — no file blobs. CONFLICTS: LWW for reports/
+# notifications; prescriptions/vault/emergency are read-only from the client.
 # =============================================================================
 
 bucket_definitions:
-  # -------------------------------------------------------------------------
-  # The user's own profile row (name, umid, planType, bloodGroup, etc.) —
-  # needed for the dashboard header, storage-plan label, and Emergency Folder
-  # reconstruction. PII-light; excludes auth secrets.
-  # -------------------------------------------------------------------------
+  # User's own profile row.
   user_self:
     parameters: SELECT request.user_id() AS user_id
     data:
       - >
-        SELECT _id AS id, umid, name, lastname, planType, bloodGroup,
-               photoURL, role, addressLine1, addressLine2, district, state, postalCode
+        SELECT _id AS id, "umid", "name", "lastname", "planType", "bloodGroup",
+               "photoURL", "role", "addressLine1", "addressLine2", "district",
+               "state", "postalCode"
         FROM users
         WHERE _id = bucket.user_id
 
-  # -------------------------------------------------------------------------
-  # Reports — metadata only (NO file blob). userId is the owner field.
-  # -------------------------------------------------------------------------
+  # Reports — metadata only. Owner: "userId".
   user_reports:
     parameters: SELECT request.user_id() AS user_id
     data:
       - >
-        SELECT _id AS id, userId, filename, originalFilename, description,
-               reportType, s3Key, fileSize, contentType, category, tags,
-               isPrivate, inEmergencyFolder, createdAt, updatedAt
+        SELECT _id AS id, "userId", "filename", "originalFilename", "description",
+               "reportType", "s3Key", "fileSize", "contentType", "category",
+               "tags", "isPrivate", "inEmergencyFolder", "createdAt", "updatedAt"
         FROM reports
-        WHERE userId = bucket.user_id
+        WHERE "userId" = bucket.user_id
 
-  # -------------------------------------------------------------------------
-  # Notifications — userId owner. Includes `read` for optimistic mark-as-read.
-  # -------------------------------------------------------------------------
+  # Notifications — owner: "userId".
   user_notifications:
     parameters: SELECT request.user_id() AS user_id
     data:
       - >
-        SELECT _id AS id, userId, title, message, type, read, link,
-               createdAt, updatedAt
+        SELECT _id AS id, "userId", "title", "message", "type", "read", "link",
+               "createdAt", "updatedAt"
         FROM notifications
-        WHERE userId = bucket.user_id
+        WHERE "userId" = bucket.user_id
 
-  # -------------------------------------------------------------------------
-  # Medical info — used by the Emergency Folder view (allergies, emergency
-  # contact). userId owner.
-  # -------------------------------------------------------------------------
+  # Medical info (Emergency Folder view) — owner: "userId".
   user_medical_info:
     parameters: SELECT request.user_id() AS user_id
     data:
       - >
-        SELECT _id AS id, userId, allergies, emergencyContact,
-               emergencyContactPhone
+        SELECT _id AS id, "userId", "allergies", "emergencyContact",
+               "emergencyContactPhone"
         FROM medicalinfos
-        WHERE userId = bucket.user_id
+        WHERE "userId" = bucket.user_id
 
-  # -------------------------------------------------------------------------
-  # Shared reports (Shared Reports Manager) — patientId owner. Excludes the
-  # verbose accessLog to keep the local store small; syncs status + expiry.
-  # -------------------------------------------------------------------------
+  # Shared reports — owner: "patientId".
   user_shared_reports:
     parameters: SELECT request.user_id() AS user_id
     data:
       - >
-        SELECT _id AS id, patientId, doctorName, doctorId, reportIds,
-               accessDuration, expiresAt, status, createdAt, updatedAt
+        SELECT _id AS id, "patientId", "doctorName", "doctorId", "reportIds",
+               "accessDuration", "expiresAt", "status", "createdAt", "updatedAt"
         FROM reportshares
-        WHERE patientId = bucket.user_id
+        WHERE "patientId" = bucket.user_id
 
-  # -------------------------------------------------------------------------
-  # Prescriptions — patientId owner. Lives in the Doctor DB (see README for
-  # connector setup). Read-only on the client.
-  # -------------------------------------------------------------------------
-  user_prescriptions:
-    parameters: SELECT request.user_id() AS user_id
-    data:
-      - >
-        SELECT _id AS id, patientId, patientName, patientUMID, doctor,
-               doctorId, hospitalName, diagnosis, medications, notes, createdAt
-        FROM prescriptions
-        WHERE patientId = bucket.user_id
-
-  # -------------------------------------------------------------------------
-  # Family vault the user HEADS. headMember owner.
-  # -------------------------------------------------------------------------
+  # Family vault the user HEADS. Owner: "headMember".
   family_vault_head:
     parameters: SELECT request.user_id() AS user_id
     data:
       - >
-        SELECT _id AS id, headMember, name, members, planType, maxMembers,
-               createdAt, updatedAt
+        SELECT _id AS id, "headMember", "name", "members", "planType",
+               "maxMembers", "createdAt", "updatedAt"
         FROM familyvaults
-        WHERE headMember = bucket.user_id
+        WHERE "headMember" = bucket.user_id
 
-  # -------------------------------------------------------------------------
-  # Family vault the user is a MEMBER of (not head). Uses an array-membership
-  # parameter so a member syncs the vault they belong to.
-  # -------------------------------------------------------------------------
+  # Family vault the user is a MEMBER of (not head). Array-membership isn't
+  # supported in a parameter query, so we match the embedded members array in
+  # the DATA query using the JSON containment operator against the token's
+  # user id. (PowerSync evaluates members.userId across the embedded array.)
   family_vault_member:
-    # Emit one parameter row per vault this user is a member of.
-    parameters: >
-      SELECT _id AS vault_id
-      FROM familyvaults
-      WHERE members[*].userId = request.user_id()
+    parameters: SELECT request.user_id() AS user_id
     data:
       - >
-        SELECT _id AS id, headMember, name, members, planType, maxMembers,
-               createdAt, updatedAt
+        SELECT _id AS id, "headMember", "name", "members", "planType",
+               "maxMembers", "createdAt", "updatedAt"
         FROM familyvaults
-        WHERE _id = bucket.vault_id
+        WHERE "members"."userId" = bucket.user_id
 
-  # -------------------------------------------------------------------------
-  # Family vault invites addressed to OR sent by the user. IMPORTANT: the `otp`
-  # field is a secret and is intentionally NOT selected — it never reaches the
-  # client's local store.
-  # -------------------------------------------------------------------------
+  # Family vault invites addressed to OR sent by the user. `otp` is a secret and
+  # is intentionally NOT selected.
   family_vault_invites:
     parameters: SELECT request.user_id() AS user_id
     data:
       - >
-        SELECT _id AS id, vaultId, invitedBy, inviteeUmid, inviteeUserId,
-               relationship, status, createdAt, updatedAt
+        SELECT _id AS id, "vaultId", "invitedBy", "inviteeUmid", "inviteeUserId",
+               "relationship", "status", "createdAt", "updatedAt"
         FROM familyvaultinvites
-        WHERE inviteeUserId = bucket.user_id OR invitedBy = bucket.user_id
+        WHERE "inviteeUserId" = bucket.user_id OR "invitedBy" = bucket.user_id

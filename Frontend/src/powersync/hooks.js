@@ -1,8 +1,31 @@
-import { useEffect, useMemo } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useQuery } from "@powersync/react";
 import { useMedicarePowerSync } from "./PowerSyncProvider";
 import usePatientStore from "../store/Patient/patientstore";
 import { safeStorageAccess } from "../utils/errorHandling";
+
+/**
+ * Network-connectivity hook for gating inherently-online actions (e.g. Aadhaar
+ * OTP generation, session-revocation, or anything that must reach the backend
+ * regardless of PowerSync). Pages use this to show a clear "requires internet"
+ * state instead of silently failing / retry-looping when offline.
+ */
+export function useIsOnline() {
+  const [online, setOnline] = useState(
+    typeof navigator !== "undefined" ? navigator.onLine : true
+  );
+  useEffect(() => {
+    const on = () => setOnline(true);
+    const off = () => setOnline(false);
+    window.addEventListener("online", on);
+    window.addEventListener("offline", off);
+    return () => {
+      window.removeEventListener("online", on);
+      window.removeEventListener("offline", off);
+    };
+  }, []);
+  return online;
+}
 
 /**
  * Local-first read hooks for the dashboard sidebar features.
@@ -242,6 +265,30 @@ export function useFamilyVault() {
   }
   // Online fallback is handled by the existing useFamilyVaultStore in the page.
   return { vault: null, isHead: false, isLoading: false, source: "online" };
+}
+
+/* ------------------------------------------------- family vault invites */
+/**
+ * Reads the `family_vault_invites` bucket (invites addressed to OR sent by the
+ * user; the `otp` secret is never synced). Local-first, offline-capable.
+ */
+export function useFamilyVaultInvites() {
+  const { enabled, ready } = useMedicarePowerSync();
+  const useLocal = enabled && ready;
+  const uid = userId();
+
+  const local = useQuery(
+    useLocal
+      ? "SELECT * FROM familyvaultinvites WHERE inviteeUserId = ? OR invitedBy = ? ORDER BY createdAt DESC"
+      : "SELECT 1 WHERE 0",
+    useLocal ? [uid, uid] : []
+  );
+
+  if (useLocal) {
+    return { data: (local.data || []).map((r) => ({ ...r, _id: r.id })), isLoading: local.isLoading, source: "local" };
+  }
+  // Online fallback handled by useFamilyVaultStore in the page.
+  return { data: [], isLoading: false, source: "online" };
 }
 
 /* --------------------------------------------------------- dashboard combo */

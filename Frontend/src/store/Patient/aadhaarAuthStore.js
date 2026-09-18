@@ -52,7 +52,6 @@ export const Steps = {
   LOGIN_METHOD: "login_method",
   LOGIN_PIN: "login_pin",
   LOGIN_OTP: "login_otp",
-  LOGIN_DEVICE_TRUST: "login_device_trust",
   DONE: "done",
 };
 
@@ -64,8 +63,6 @@ const initialFlowState = {
   otpExpiresAt: null,
   attemptsLeft: null,
   methods: ["pin", "otp"],
-  stepUp: false,
-  newDevice: false,
   error: null,
   loading: false,
 };
@@ -165,7 +162,7 @@ export const useAadhaarAuthStore = create((set, get) => ({
   },
 
   /** Step C — set PIN, create account, auto-authenticate. */
-  submitRegistrationPin: async ({ pin }) => {
+  submitRegistrationPin: async ({ pin, usePhotoAsProfile = false }) => {
     const { sessionId } = get();
     if (!sessionId) {
       get().resetFlow("register");
@@ -174,7 +171,9 @@ export const useAadhaarAuthStore = create((set, get) => ({
     }
     set({ loading: true, error: null });
     try {
-      const res = await api.registerSetPin({ sessionId, pin });
+      // `usePhotoAsProfile` is the separate, explicit consent to reuse the
+      // Aadhaar photo as the app profile picture (default false).
+      const res = await api.registerSetPin({ sessionId, pin, usePhotoAsProfile });
       if (res.code === "ACCOUNT_EXISTS") {
         set({ loading: false, error: messageForCode(AuthErrorCode.ACCOUNT_EXISTS) });
         return { ok: false, code: "ACCOUNT_EXISTS" };
@@ -225,24 +224,12 @@ export const useAadhaarAuthStore = create((set, get) => ({
     set({ loading: true, error: null });
     try {
       const res = await api.loginWithPin({ aadhaarNumber, pin });
-      if (res.code === "STEP_UP_REQUIRED" || res.stepUp) {
-        // New device / risk → force OTP. Carry the challengeId to the OTP screen.
-        set({
-          loading: false,
-          stepUp: true,
-          newDevice: true,
-          challengeId: res.challengeId,
-          otpExpiresAt: Date.now() + 600 * 1000,
-          step: Steps.LOGIN_OTP,
-          error: null,
-        });
-        return { ok: false, code: "STEP_UP_REQUIRED" };
-      }
+      // Device step-up removed: a correct PIN logs in directly on any device.
       if (!res.success) {
         set({ loading: false, error: messageForCode(AuthErrorCode.INVALID_CREDENTIALS) });
         return { ok: false, code: AuthErrorCode.INVALID_CREDENTIALS };
       }
-      get()._finishLogin(res, { newDevice: false });
+      get()._finishLogin(res);
       return { ok: true };
     } catch (err) {
       const code = get()._handleError(err);
@@ -287,7 +274,7 @@ export const useAadhaarAuthStore = create((set, get) => ({
         set({ loading: false, error: messageForCode(AuthErrorCode.OTP_INVALID) });
         return { ok: false, code: AuthErrorCode.OTP_INVALID };
       }
-      get()._finishLogin(res, { newDevice: get().newDevice });
+      get()._finishLogin(res);
       return { ok: true };
     } catch (err) {
       const code = get()._handleError(err);
@@ -295,8 +282,8 @@ export const useAadhaarAuthStore = create((set, get) => ({
     }
   },
 
-  /** Shared login completion. Shows the device-trust moment for new devices. */
-  _finishLogin: (res, { newDevice }) => {
+  /** Shared login completion → authenticated, straight to DONE. */
+  _finishLogin: (res) => {
     // Bridge into the existing patient auth store so ProtectedRoute passes and
     // the dashboard hydrates via /api/auth/user — same flow as email login.
     bridgeToPatientAuth(res);
@@ -305,14 +292,9 @@ export const useAadhaarAuthStore = create((set, get) => ({
       status: "authenticated",
       user: res.user || null,
       challengeId: null,
-      stepUp: false,
-      // If this was a new device, surface the security moment before DONE.
-      step: newDevice ? Steps.LOGIN_DEVICE_TRUST : Steps.DONE,
-      newDevice,
+      step: Steps.DONE,
     });
   },
-
-  acknowledgeDevice: () => set({ step: Steps.DONE, newDevice: false }),
 
   logout: async () => {
     try {

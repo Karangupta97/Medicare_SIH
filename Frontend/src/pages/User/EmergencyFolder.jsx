@@ -16,44 +16,44 @@ import {
 } from "lucide-react";
 import { toast } from "react-hot-toast";
 import { useAuthStore } from "../../store/Patient/authStore";
-import usePatientStore from "../../store/Patient/patientstore";
-
-const emptyMedical = {
-  allergies: [],
-  emergencyContact: "",
-  emergencyContactPhone: "",
-};
+import { useEmergencyFolder, useIsOnline } from "../../powersync/hooks";
+import { setReportEmergencyFolder } from "../../powersync/writes";
 
 const EmergencyFolder = () => {
   const navigate = useNavigate();
-  const { token, isAuthenticated, user, refreshUserData } = useAuthStore();
-  const { reports, fetchReports, setReportEmergencyFolder } = usePatientStore();
-  const [medical, setMedical] = useState(emptyMedical);
-  const [loadingMedical, setLoadingMedical] = useState(true);
+  const { token, isAuthenticated, user } = useAuthStore();
+
+  // Local-first READ: reports flagged inEmergencyFolder + medical info + profile
+  // are reconstructed from the `user_reports`, `medicalinfos`, and `user_self`
+  // PowerSync buckets (offline-capable; falls back to the online store when
+  // PowerSync is disabled). No blocking network fetch on load.
+  const emergency = useEmergencyFolder();
+  const online = useIsOnline();
+
   const [refreshing, setRefreshing] = useState(false);
   const [removingReportId, setRemovingReportId] = useState(null);
 
+  // Prefer the locally-synced medical info; fall back to the online value when
+  // PowerSync is disabled. Optionally still fetch fresh medical info when online.
+  const [medicalOverride, setMedicalOverride] = useState(null);
+  const loadingMedical = emergency.isLoading;
+
   const loadMedical = useCallback(async () => {
+    // Inherently-online refresh of the medical-info block. Guarded by callers.
     try {
-      setLoadingMedical(true);
       const response = await axios.get("/api/medical-info", {
         headers: { Authorization: `Bearer ${token}` },
       });
       if (response.data.success && response.data.medicalInfo) {
         const m = response.data.medicalInfo;
-        setMedical({
+        setMedicalOverride({
           allergies: m.allergies || [],
           emergencyContact: m.emergencyContact || "",
           emergencyContactPhone: m.emergencyContactPhone || "",
         });
-      } else {
-        setMedical(emptyMedical);
       }
     } catch (e) {
       console.error(e);
-      setMedical(emptyMedical);
-    } finally {
-      setLoadingMedical(false);
     }
   }, [token]);
 
@@ -61,25 +61,17 @@ const EmergencyFolder = () => {
     if (!isAuthenticated || !token) {
       toast.error("Please sign in to view your Emergency Folder");
       navigate("/login");
-      return;
     }
-    refreshUserData().catch(() => {});
-    fetchReports(token).catch(() => {});
-    loadMedical();
-  }, [
-    isAuthenticated,
-    token,
-    navigate,
-    fetchReports,
-    loadMedical,
-    refreshUserData,
-  ]);
+  }, [isAuthenticated, token, navigate]);
 
   const handleRefresh = async () => {
+    // Refresh is an inherently-online action (live medical-info + report sync).
+    if (!online) {
+      toast.error("Refresh requires an internet connection.");
+      return;
+    }
     setRefreshing(true);
     try {
-      await refreshUserData();
-      await fetchReports(token);
       await loadMedical();
       toast.success("Updated");
     } catch {
@@ -89,21 +81,34 @@ const EmergencyFolder = () => {
     }
   };
 
-  const emergencyReports = (reports || []).filter((r) => r.inEmergencyFolder);
-  const bloodGroup = user?.bloodGroup?.trim() || null;
+  // Merge synced + online-override medical info.
+  const syncedMedical = emergency.medical || {};
+  const medical =
+    medicalOverride || {
+      allergies: syncedMedical.allergies || [],
+      emergencyContact: syncedMedical.emergencyContact || "",
+      emergencyContactPhone: syncedMedical.emergencyContactPhone || "",
+    };
+
+  const emergencyReports = emergency.reports || [];
+  // Prefer synced profile fields, falling back to the auth-store user.
+  const profileUser = emergency.user || user || {};
+  const bloodGroup = (profileUser.bloodGroup || user?.bloodGroup || "").trim() || null;
   const patientDisplayName =
-    [user?.name, user?.lastname].filter(Boolean).join(" ").trim() || null;
+    [profileUser.name || user?.name, profileUser.lastname || user?.lastname]
+      .filter(Boolean)
+      .join(" ")
+      .trim() || null;
 
   const handleRemoveFromEmergency = async (reportId) => {
     setRemovingReportId(String(reportId));
     try {
-      await setReportEmergencyFolder(token, reportId, false);
+      // Optimistic + offline-queued via the PowerSync write helper (metadata-only).
+      await setReportEmergencyFolder(reportId, false);
       toast.success("Removed from Emergency Folder");
     } catch (e) {
       console.error(e);
-      toast.error(
-        e.response?.data?.message || "Could not remove report"
-      );
+      toast.error(e.response?.data?.message || "Could not remove report");
     } finally {
       setRemovingReportId(null);
     }

@@ -33,10 +33,13 @@ export function useLocalStorageUsage(planType = "free") {
     useLocal ? [uid] : []
   );
 
-  const used = (q.data && q.data[0]?.used) || 0;
+  const row = q.data && q.data[0];
+  const used = row?.used || 0;
+  const fileCount = row?.count || 0;
   const limit = getStorageLimitForPlan(planType);
   return {
     currentUsage: used,
+    fileCount,
     storageLimit: limit,
     availableSpace: Math.max(0, limit - used),
     usagePercentage: limit ? Math.round((used / limit) * 100) : 0,
@@ -44,6 +47,9 @@ export function useLocalStorageUsage(planType = "free") {
     storageLimitMB: Math.round((limit / (1024 * 1024)) * 100) / 100,
     source: useLocal ? "local" : "online",
     available: useLocal,
+    // True while PowerSync is enabled but the first local query hasn't resolved
+    // yet — lets consumers show a lightweight loading state instead of "0".
+    hydrating: useLocal && q.isLoading && row === undefined,
   };
 }
 

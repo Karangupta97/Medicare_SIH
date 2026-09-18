@@ -1,33 +1,36 @@
-import React, { useState, useEffect } from 'react';
+import React from 'react';
 import { Link } from 'react-router-dom';
-import { FiHardDrive, FiBarChart, FiArrowUp, FiInfo } from 'react-icons/fi';
-import storageAPI from '../services/storageAPI';
+import { FiHardDrive, FiBarChart, FiArrowUp } from 'react-icons/fi';
+import { useLocalStorageUsage } from '../powersync/storage';
+import { useAuthStore } from '../store/Patient/authStore';
 
+/**
+ * Storage usage widget — FULLY LOCAL-FIRST.
+ *
+ * Reads storage usage from PowerSync's local synced report metadata via
+ * useLocalStorageUsage (sums reports.fileSize from the `user_reports` bucket) —
+ * NO network call. This removes the previous /api/storage/storage-info fetch
+ * that error-looped whenever the backend/Atlas was unreachable, flooding the
+ * console. Works fully offline; the plan limit comes from the (locally known)
+ * user plan.
+ */
 const StorageUsageWidget = ({ showUpgradeButton = true, compact = false }) => {
-  const [storageInfo, setStorageInfo] = useState(null);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState(null);
+  const { user } = useAuthStore();
+  const planType = user?.planType || 'free';
 
-  useEffect(() => {
-    fetchStorageInfo();
-  }, []);
-
-  const fetchStorageInfo = async () => {
-    try {
-      setLoading(true);
-      setError(null);
-      const response = await storageAPI.getStorageInfo();
-      setStorageInfo(response.storageInfo);
-    } catch (err) {
-      console.error('Error fetching storage info:', err);
-      setError('Failed to load storage information');
-    } finally {
-      setLoading(false);
-    }
-  };
+  // Local, reactive usage. `hydrating` is true only during the very first local
+  // query resolution, so we can show a skeleton instead of a misleading "0".
+  const {
+    currentUsage,
+    storageLimit,
+    availableSpace,
+    usagePercentage,
+    fileCount,
+    hydrating,
+  } = useLocalStorageUsage(planType);
 
   const formatBytes = (bytes) => {
-    if (bytes === 0) return '0 MB';
+    if (!bytes || bytes === 0) return '0 MB';
     const mb = bytes / (1024 * 1024);
     if (mb < 1) return `${(mb * 1024).toFixed(1)} KB`;
     if (mb < 1024) return `${mb.toFixed(1)} MB`;
@@ -46,17 +49,18 @@ const StorageUsageWidget = ({ showUpgradeButton = true, compact = false }) => {
     return 'bg-blue-500';
   };
 
-  const getPlanDisplayName = (planType) => {
+  const getPlanDisplayName = (plan) => {
     const plans = {
       free: 'Free Plan',
       basic: 'Basic Plan',
       premium: 'Premium Plan',
-      pro: 'Pro Plan'
+      pro: 'Pro Plan',
     };
-    return plans[planType] || 'Unknown Plan';
+    return plans[plan] || 'Free Plan';
   };
 
-  if (loading) {
+  // Lightweight loading state while the local store hydrates on first load.
+  if (hydrating) {
     return (
       <div className={`bg-white rounded-lg shadow-sm border border-gray-200 ${compact ? 'p-4' : 'p-6'}`}>
         <div className="animate-pulse">
@@ -67,21 +71,6 @@ const StorageUsageWidget = ({ showUpgradeButton = true, compact = false }) => {
       </div>
     );
   }
-
-  if (error) {
-    return (
-      <div className={`bg-white rounded-lg shadow-sm border border-gray-200 ${compact ? 'p-4' : 'p-6'}`}>
-        <div className="flex items-center text-red-600">
-          <FiInfo className="w-4 h-4 mr-2" />
-          <span className="text-sm">{error}</span>
-        </div>
-      </div>
-    );
-  }
-
-  if (!storageInfo) return null;
-
-  const usagePercentage = Math.round((storageInfo.currentUsage / storageInfo.storageLimit) * 100);
 
   return (
     <div className={`bg-white rounded-lg shadow-sm border border-gray-200 ${compact ? 'p-4' : 'p-6'}`}>
@@ -94,7 +83,7 @@ const StorageUsageWidget = ({ showUpgradeButton = true, compact = false }) => {
         </div>
         {!compact && (
           <span className="text-xs text-gray-500 bg-gray-100 px-2 py-1 rounded">
-            {getPlanDisplayName(storageInfo.planType)}
+            {getPlanDisplayName(planType)}
           </span>
         )}
       </div>
@@ -106,7 +95,7 @@ const StorageUsageWidget = ({ showUpgradeButton = true, compact = false }) => {
             {usagePercentage}% used
           </span>
           <span className="text-sm text-gray-600">
-            {formatBytes(storageInfo.currentUsage)} / {formatBytes(storageInfo.storageLimit)}
+            {formatBytes(currentUsage)} / {formatBytes(storageLimit)}
           </span>
         </div>
         <div className="w-full bg-gray-200 rounded-full h-2">
@@ -121,13 +110,13 @@ const StorageUsageWidget = ({ showUpgradeButton = true, compact = false }) => {
       <div className="flex items-center justify-between text-sm text-gray-600">
         <div className="flex items-center">
           <FiBarChart className="w-4 h-4 mr-1" />
-          <span>{storageInfo.fileCount || 0} files</span>
+          <span>{fileCount || 0} files</span>
         </div>
-        <span>{formatBytes(storageInfo.availableSpace)} available</span>
+        <span>{formatBytes(availableSpace)} available</span>
       </div>
 
       {/* Upgrade Button */}
-      {showUpgradeButton && usagePercentage >= 80 && storageInfo.planType !== 'pro' && (
+      {showUpgradeButton && usagePercentage >= 80 && planType !== 'pro' && (
         <div className="mt-4 pt-4 border-t border-gray-100">
           <Link
             to="/pricing"

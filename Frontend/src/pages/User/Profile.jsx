@@ -26,7 +26,8 @@ import {
 import {
   FiX,
   FiEye,
-
+  FiTrash2,
+  FiUpload,
   FiLoader,
   FiAlertCircle,
 } from "react-icons/fi";
@@ -683,7 +684,10 @@ const Profile = () => {
     formData.append("file", file);
 
     try {
-      const response = await axios.put("/api/auth/update-profile", formData, {
+      // Dedicated profile-picture endpoint: server resizes/compresses/strips
+      // EXIF, replaces users.photoURL and deletes the old object. This only
+      // ever touches the app profile picture — never the Aadhaar KYC photo.
+      const response = await axios.put("/api/user/profile/picture", formData, {
         headers: {
           "Content-Type": "multipart/form-data",
           Authorization: `Bearer ${localStorage.getItem("token")}`,
@@ -759,12 +763,35 @@ const Profile = () => {
         return;
       }
 
+      // Always re-resolve state/district from the postal code so a stale
+      // value (e.g. a legacy "India" saved in the state field) can never be
+      // submitted and trigger a backend "State mismatch" rejection.
+      let resolvedDistrict = formData.district;
+      let resolvedState = formData.state;
+      try {
+        const pinRes = await fetch(`/api/pincode/${formData.postalCode}`);
+        if (pinRes.ok) {
+          const pinData = await pinRes.json();
+          resolvedDistrict = pinData.district || resolvedDistrict;
+          resolvedState = pinData.state || resolvedState;
+          // Keep the form in sync with the authoritative values
+          setFormData((prev) => ({
+            ...prev,
+            district: resolvedDistrict,
+            state: resolvedState,
+          }));
+        }
+      } catch {
+        // If the lookup fails, fall back to the current form values and let
+        // the backend perform final validation.
+      }
+
       // Prepare address data
       const addressData = {
         addressLine1: formData.addressLine1,
         addressLine2: formData.addressLine2 || "",
-        district: formData.district,
-        state: formData.state,
+        district: resolvedDistrict,
+        state: resolvedState,
         postalCode: formData.postalCode,
       };
 
@@ -822,7 +849,7 @@ const Profile = () => {
       const formData = new FormData();
       formData.append("file", editedImage);
 
-      const response = await axios.put("/api/auth/update-profile", formData, {
+      const response = await axios.put("/api/user/profile/picture", formData, {
         headers: {
           "Content-Type": "multipart/form-data",
           Authorization: `Bearer ${localStorage.getItem("token")}`,
@@ -853,6 +880,84 @@ const Profile = () => {
     } finally {
       setUploading(false);
       setIsPhotoEditorOpen(false);
+    }
+  };
+
+  // Set the profile picture from the user's own stored Aadhaar photo. The
+  // server decrypts its KYC copy, processes it, uploads it, and sets photoURL.
+  // The KYC copy itself is never modified.
+  const handleFetchFromAadhaar = async () => {
+    setUploading(true);
+    const loadingToast = toast.loading("Fetching your Aadhaar photo...");
+    try {
+      const response = await axios.post(
+        "/api/user/profile/picture/from-aadhaar",
+        {},
+        { headers: { Authorization: `Bearer ${localStorage.getItem("token")}` } }
+      );
+
+      if (response.data.success && response.data.user) {
+        setUser({ ...response.data.user, _tempPhotoURL: false });
+
+        const currentUser = JSON.parse(localStorage.getItem("user") || "{}");
+        localStorage.setItem(
+          "user",
+          JSON.stringify({
+            ...currentUser,
+            photoURL: response.data.user.photoURL,
+            _tempPhotoURL: false,
+          })
+        );
+
+        toast.dismiss(loadingToast);
+        toast.success("Profile picture set from your Aadhaar photo");
+      } else {
+        throw new Error("Invalid response from server");
+      }
+    } catch (error) {
+      console.error("Error fetching Aadhaar photo:", error);
+      toast.dismiss(loadingToast);
+      toast.error(
+        error.response?.data?.message ||
+          "Couldn't fetch your Aadhaar photo. You can upload a photo instead."
+      );
+    } finally {
+      setUploading(false);
+    }
+  };
+
+  // Remove the app profile picture. Clears users.photoURL on the server (which
+  // also deletes the S3 object) so the UI falls back to the default avatar /
+  // initials. Never affects the Aadhaar KYC photo copy.
+  const handleRemovePhoto = async () => {
+    setUploading(true);
+    try {
+      const response = await axios.delete("/api/user/profile/picture", {
+        headers: {
+          Authorization: `Bearer ${localStorage.getItem("token")}`,
+        },
+      });
+
+      if (response.data.success) {
+        setUser({
+          ...(response.data.user || {}),
+          photoURL: "",
+          _tempPhotoURL: false,
+        });
+
+        const currentUser = JSON.parse(localStorage.getItem("user") || "{}");
+        localStorage.setItem(
+          "user",
+          JSON.stringify({ ...currentUser, photoURL: "", _tempPhotoURL: false })
+        );
+
+        toast.success("Profile picture removed");
+      }
+    } catch (error) {
+      console.error("Error removing profile photo:", error);
+      toast.error("Failed to remove profile picture");
+    } finally {
+      setUploading(false);
     }
   };
 
@@ -3418,7 +3523,7 @@ const Profile = () => {
                     </div>
                   </div>
 
-                  <div className="flex gap-2 mt-3">
+                  <div className="flex flex-wrap justify-center gap-2 mt-3">
                     <button
                       onClick={handlePicView}
                       className="flex items-center gap-1 px-3 py-1.5 bg-white/10 backdrop-blur-sm rounded-lg text-white text-xs hover:bg-white/20 transition-colors border border-white/20"
@@ -3426,6 +3531,34 @@ const Profile = () => {
                       <FiEye className="w-3 h-3" />
                       View
                     </button>
+                    {/* Option 1: upload a new photo from device */}
+                    <button
+                      onClick={() => fileInputRef.current?.click()}
+                      disabled={uploading}
+                      className="flex items-center gap-1 px-3 py-1.5 bg-white/10 backdrop-blur-sm rounded-lg text-white text-xs hover:bg-white/20 transition-colors border border-white/20 disabled:opacity-50 disabled:cursor-not-allowed"
+                    >
+                      <FiUpload className="w-3 h-3" />
+                      Upload photo
+                    </button>
+                    {/* Option 2: use the government-verified Aadhaar photo */}
+                    <button
+                      onClick={handleFetchFromAadhaar}
+                      disabled={uploading}
+                      className="flex items-center gap-1 px-3 py-1.5 bg-white/10 backdrop-blur-sm rounded-lg text-white text-xs hover:bg-white/20 transition-colors border border-white/20 disabled:opacity-50 disabled:cursor-not-allowed"
+                    >
+                      <FaShieldAlt className="w-3 h-3" />
+                      Use Aadhaar photo
+                    </button>
+                    {user?.photoURL && (
+                      <button
+                        onClick={handleRemovePhoto}
+                        disabled={uploading}
+                        className="flex items-center gap-1 px-3 py-1.5 bg-white/10 backdrop-blur-sm rounded-lg text-white text-xs hover:bg-red-500/30 transition-colors border border-white/20 disabled:opacity-50 disabled:cursor-not-allowed"
+                      >
+                        <FiTrash2 className="w-3 h-3" />
+                        Remove
+                      </button>
+                    )}
                   </div>
                   <input
                     type="file"

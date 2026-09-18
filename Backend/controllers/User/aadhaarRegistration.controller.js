@@ -11,7 +11,9 @@ import { logEvent } from "../../services/aadhaar/audit.service.js";
 import { issueSession } from "../../services/aadhaar/session.service.js";
 import { isValidAadhaarNumber } from "../../utils/aadhaar/verhoeff.util.js";
 import { computeAadhaarIdentityHash } from "../../utils/aadhaar/identityHash.util.js";
-import { encryptField, hashContact } from "../../utils/aadhaar/fieldEncryption.util.js";
+import { encryptField, hashContact, decryptField } from "../../utils/aadhaar/fieldEncryption.util.js";
+import { processProfileImage, decodeBase64Image } from "../../utils/aadhaar/imageProcessing.util.js";
+import { uploadProfilePictureBuffer } from "../../services/s3.service.js";
 import { validatePinStrength, hashPin } from "../../utils/aadhaar/pin.util.js";
 import { deviceFingerprint, clientIp, userAgent, padResponseTime } from "../../utils/aadhaar/requestContext.util.js";
 import generatePatientUMID from "../../UMID/patient.UMID.js";
@@ -356,7 +358,12 @@ export const registerStepB = async (req, res) => {
 export const registerSetPin = async (req, res) => {
   const ip = clientIp(req);
   const fp = deviceFingerprint(req);
-  const { sessionId, pin } = req.body;
+  // `usePhotoAsProfile` is the SEPARATE, explicit consent toggle shown on the
+  // set-PIN screen ("Use your Aadhaar photo as your profile picture?"). It is
+  // independent of the main KYC consent and defaults to false: anything other
+  // than an explicit boolean true is treated as "no".
+  const { sessionId, pin, usePhotoAsProfile } = req.body;
+  const photoConsent = usePhotoAsProfile === true;
 
   try {
     const strength = validatePinStrength(String(pin || ""));
@@ -452,6 +459,80 @@ export const registerSetPin = async (req, res) => {
       throw e;
     }
 
+    // ========================================================================
+    // AADHAAR PHOTO — TWO SEPARATE, INDEPENDENT COPIES. NEVER CROSS-REFERENCED.
+    // ========================================================================
+    // (1) KYC COPY — ALWAYS stored. Already handled above: the raw decoded
+    //     Aadhaar photo was encrypted (AES-256-GCM, same KMS-managed key as
+    //     name/DOB/address) into KycProfile.encrypted_photo. It is the permanent,
+    //     immutable compliance copy: never exposed via a public URL, only ever
+    //     read through the audited compliance route.
+    //
+    // (2) APP PROFILE PICTURE — stored ONLY if the user explicitly consented on
+    //     this set-PIN screen. It lives in users.photoURL (the app's existing
+    //     profile-picture field) and is a DERIVED, mutable artifact: resized,
+    //     EXIF-stripped, re-encoded, uploaded to the same S3 bucket used for
+    //     report uploads.
+    //
+    // WHY THEY ARE KEPT SEPARATE AND NEVER CROSS-REFERENCED:
+    //   - Different legal basis: (1) is retained for KYC/compliance regardless of
+    //     later profile changes; (2) exists purely because the user opted in and
+    //     can be changed or removed by the user at any time.
+    //   - Different exposure: (1) must never leave the encrypted store except via
+    //     an audited compliance read; (2) is served to the app via a signed URL.
+    //   - Independence: later profile-picture changes (PUT/DELETE /profile/picture)
+    //     only ever touch users.photoURL. They must NOT read, modify, re-derive,
+    //     or delete the KYC copy — and this branch is the ONLY place the KYC photo
+    //     is ever used to seed a profile picture, and only with fresh consent.
+
+    // Record the photo-reuse consent decision SEPARATELY from the main KYC
+    // consent (which was logged as part of account_created). We audit both the
+    // opt-in and the explicit opt-out so the consent state is provable.
+    await logEvent("profile_photo_consent", {
+      userId: user._id,
+      ip,
+      deviceFingerprint: fp,
+      consentFlag: photoConsent,
+      reason: photoConsent ? "opted_in_at_registration" : "declined_at_registration",
+    });
+
+    if (photoConsent) {
+      // Consented: derive the app profile picture from the SAME raw photo bytes,
+      // decrypted from the KYC envelope we just persisted. We decrypt to a fresh
+      // buffer here (a read of our own encrypted copy) purely to feed the shared
+      // image pipeline — we never mutate or delete the KYC copy itself.
+      try {
+        // The KYC photo is the provider's base64 STRING (encrypted). Decrypt to
+        // that text, then base64-decode into real image bytes before processing
+        // — sharp needs decoded bytes, not the base64 characters.
+        const photoBase64 = decryptField(k.encrypted_photo || null);
+        const rawPhoto = decodeBase64Image(photoBase64);
+        if (rawPhoto && rawPhoto.length > 0) {
+          const processed = await processProfileImage(rawPhoto, { format: "webp" });
+          const { fileUrl, s3Key, expiresAt } = await uploadProfilePictureBuffer(
+            processed.buffer,
+            { userId: String(user._id), contentType: processed.contentType, extension: processed.extension }
+          );
+          await UserModel.findByIdAndUpdate(user._id, {
+            $set: {
+              photoURL: fileUrl, // app profile picture (users.profilePictureUrl equivalent)
+              photoS3Key: s3Key,
+              photoIsPermanent: true,
+              photoURLExpiresAt: expiresAt,
+            },
+          });
+        }
+      } catch (photoErr) {
+        // Deriving the profile picture is best-effort and must NEVER block
+        // account creation. On failure we simply leave photoURL empty (the
+        // frontend falls back to the default avatar/initials). Never log the
+        // raw buffer/base64 — only the error message.
+        console.error("[registerSetPin] profile-picture derivation failed:", photoErr.message);
+      }
+    }
+    // If consent is OFF we intentionally leave users.photoURL empty → default
+    // avatar/initials in the UI. The KYC copy remains stored regardless.
+
     // Destroy the registration session and audit.
     await RegSession.deleteOne({ _id: session._id });
     await logEvent("pin_set", { userId: user._id, ip, deviceFingerprint: fp, reason: "registration" });
@@ -484,7 +565,9 @@ export const registerSetPin = async (req, res) => {
       refreshTokenExpiresAt: expiresAt,
     });
   } catch (err) {
-    console.error("[registerSetPin] error:", err.message);
+    // Full stack (server-side only) so set-pin failures are debuggable. The
+    // client still gets the generic message.
+    console.error("[registerSetPin] error:", err.message, "\nstack:", err.stack);
     return res.status(500).json({ success: false, message: GENERIC_TRY_LATER });
   }
 };

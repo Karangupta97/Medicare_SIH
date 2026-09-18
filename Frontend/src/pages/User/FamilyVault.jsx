@@ -37,6 +37,7 @@ import { Helmet } from "react-helmet-async";
 import toast from "react-hot-toast";
 import useFamilyVaultStore from "../../store/Patient/familyVaultStore";
 import useAuthStore from "../../store/Patient/authStore";
+import { useFamilyVault, useFamilyVaultInvites, useIsOnline } from "../../powersync/hooks";
 
 // ─── Relationship Labels ─────────────────────────────────────
 const RELATIONSHIP_OPTIONS = [
@@ -516,13 +517,29 @@ const FamilyVault = () => {
   const navigate = useNavigate();
   const { user } = useAuthStore();
   const {
-    vault, isHead, pendingInvites, myInvites, dashboard,
+    vault: storeVault, isHead: storeIsHead, pendingInvites, myInvites: storeMyInvites, dashboard,
     familyEmergency, isLoading, error,
     fetchVault, createVault, deleteVault,
     inviteMember, verifyInviteOtp, removeMember,
     updateMemberPermissions, fetchFamilyDashboard,
     fetchFamilyEmergency, fetchMyInvites, clearError,
   } = useFamilyVaultStore();
+
+  // Local-first READ from the `family_vault_head` / `family_vault_member`
+  // buckets (the vault you head or belong to) and `family_vault_invites`
+  // (invites to/from you). Offline-capable; the base page renders from these
+  // when PowerSync is enabled, falling back to the store otherwise.
+  const localVault = useFamilyVault();
+  const localInvites = useFamilyVaultInvites();
+  const online = useIsOnline();
+
+  // Prefer the synced vault/invites for the base render; fall back to the store.
+  const vault = localVault.vault || storeVault;
+  const isHead = localVault.vault ? localVault.isHead : storeIsHead;
+  const myInvites =
+    localInvites.source === "local" && localInvites.data.length
+      ? localInvites.data
+      : storeMyInvites;
 
   const [activeTab, setActiveTab] = useState("dashboard");
   const [showCreateModal, setShowCreateModal] = useState(false);
@@ -531,30 +548,40 @@ const FamilyVault = () => {
   const [selectedInviteId, setSelectedInviteId] = useState(null);
   const [initialLoaded, setInitialLoaded] = useState(false);
 
-  // Fetch vault + my pending invites on mount
+  // Best-effort live refresh of vault + invites when ONLINE. Offline, the page
+  // renders from the local-first hooks above instead of hanging on the network.
   useEffect(() => {
+    if (!online) {
+      setInitialLoaded(true);
+      return;
+    }
     const load = async () => {
       try {
         await fetchVault();
       } catch {
         // No vault — check for pending invites
       }
-      // Always fetch invites for the current user (they may have invites even without a vault)
       await fetchMyInvites();
       setInitialLoaded(true);
     };
     load();
-  }, [fetchVault, fetchMyInvites]);
+  }, [online, fetchVault, fetchMyInvites]);
 
-  // Fetch tab data
+  // Tab data (dashboard aggregation + family emergency) requires live network
+  // — these aggregate OTHER members' data, which isn't synced locally.
   useEffect(() => {
-    if (!vault) return;
+    if (!vault || !online) return;
     if (activeTab === "dashboard") fetchFamilyDashboard().catch(() => {});
     if (activeTab === "emergency") fetchFamilyEmergency().catch(() => {});
-  }, [activeTab, vault, fetchFamilyDashboard, fetchFamilyEmergency]);
+  }, [activeTab, vault, online, fetchFamilyDashboard, fetchFamilyEmergency]);
 
   const handleRemoveMember = useCallback(async (memberId) => {
     if (!window.confirm("Remove this member from your Family Vault?")) return;
+    // Removing a member is a live, authenticated operation — not offline-safe.
+    if (!navigator.onLine) {
+      toast.error("Managing members requires an internet connection.");
+      return;
+    }
     try {
       await removeMember(memberId);
       toast.success("Member removed");
@@ -565,6 +592,10 @@ const FamilyVault = () => {
   }, [removeMember, fetchVault]);
 
   const handlePermissionsChange = useCallback(async (memberId, perms) => {
+    if (!navigator.onLine) {
+      toast.error("Updating permissions requires an internet connection.");
+      return;
+    }
     try {
       await updateMemberPermissions(memberId, perms);
       toast.success("Permissions updated");
@@ -577,6 +608,25 @@ const FamilyVault = () => {
     const uid = member.userId?._id || member.userId;
     navigate(`/dashboard/family-vault/member/${uid}`);
   }, [navigate]);
+
+  // Inviting a member and creating a vault both run inherently-online flows
+  // (server OTP to the invitee, plan checks). Gate the modal-open triggers so
+  // offline users get a clear message instead of a modal that can't complete.
+  const openInviteModal = useCallback(() => {
+    if (!online) {
+      toast.error("Inviting members requires an internet connection.");
+      return;
+    }
+    setShowInviteModal(true);
+  }, [online]);
+
+  const openCreateModal = useCallback(() => {
+    if (!online) {
+      toast.error("Creating a vault requires an internet connection.");
+      return;
+    }
+    setShowCreateModal(true);
+  }, [online]);
 
   // Plan check — only relevant if user has no vault
   const hasPlan = user?.planType === "pro" || user?.planType === "premium";
@@ -623,7 +673,7 @@ const FamilyVault = () => {
             View shared reports, track health trends, and access emergency info — all in one place.
           </p>
           <button
-            onClick={() => setShowCreateModal(true)}
+            onClick={openCreateModal}
             className="inline-flex items-center space-x-2 px-8 py-4 bg-gradient-to-r from-violet-600 to-purple-600 text-white rounded-2xl font-semibold hover:from-violet-700 hover:to-purple-700 transition-all shadow-xl shadow-violet-200 hover:shadow-2xl hover:-translate-y-0.5"
           >
             <Sparkles className="w-5 h-5" />
@@ -670,7 +720,7 @@ const FamilyVault = () => {
         {isHead && (
           <div className="flex items-center space-x-2">
             <button
-              onClick={() => setShowInviteModal(true)}
+              onClick={openInviteModal}
               disabled={vault.members?.length >= vault.maxMembers}
               className="flex items-center space-x-2 px-5 py-2.5 bg-gradient-to-r from-emerald-600 to-teal-600 text-white rounded-xl hover:from-emerald-700 hover:to-teal-700 transition-all font-medium shadow-lg shadow-emerald-200 disabled:opacity-50 disabled:cursor-not-allowed text-sm"
             >
@@ -859,7 +909,7 @@ const FamilyVault = () => {
               </h3>
               {isHead && vault.members?.length < vault.maxMembers && (
                 <button
-                  onClick={() => setShowInviteModal(true)}
+                  onClick={openInviteModal}
                   className="flex items-center space-x-1.5 text-sm text-emerald-600 hover:text-emerald-700 font-medium"
                 >
                   <UserPlus className="w-4 h-4" />
@@ -887,7 +937,7 @@ const FamilyVault = () => {
                 <p className="text-gray-500 mb-3">No members yet</p>
                 {isHead && (
                   <button
-                    onClick={() => setShowInviteModal(true)}
+                    onClick={openInviteModal}
                     className="inline-flex items-center space-x-2 px-5 py-2.5 bg-gradient-to-r from-emerald-600 to-teal-600 text-white rounded-xl font-medium text-sm"
                   >
                     <UserPlus className="w-4 h-4" />

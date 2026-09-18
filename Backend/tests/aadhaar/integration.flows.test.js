@@ -175,17 +175,19 @@ test("login PIN: known device succeeds; wrong PIN generic-fails", { skip: SKIP }
   assert.match(res.body.message, /Invalid credentials/);
 });
 
-test("login PIN: unknown device forces step-up (OTP)", { skip: SKIP }, async () => {
+test("login PIN: a NEW/unknown device logs in directly (no step-up)", { skip: SKIP }, async () => {
   await harness.clear();
   await register(AADHAAR, GOOD_PIN, "device-1");
   const { provider } = makeFakeKycProvider();
   factory.__setKycProviderForTests(provider);
 
+  // Device step-up is removed: a correct PIN from an unrecognized device logs in
+  // directly and issues a session — no STEP_UP_REQUIRED, no forced OTP.
   const res = fakeRes();
   await login.loginWithPin(fakeReq({ body: { aadhaarNumber: AADHAAR, pin: GOOD_PIN, deviceId: "brand-new-device" } }), res);
-  assert.equal(res.body.code, "STEP_UP_REQUIRED");
-  assert.equal(res.body.stepUp, true);
-  assert.ok(res.body.challengeId);
+  assert.equal(res.body.success, true, "new-device PIN login succeeds directly");
+  assert.ok(res.body.accessToken, "session issued");
+  assert.notEqual(res.body.code, "STEP_UP_REQUIRED", "no step-up");
 });
 
 test("PIN lockout: backoff engages after 3 failures", { skip: SKIP }, async () => {

@@ -332,3 +332,86 @@ export const downloadFileFromS3 = async (s3Key) => {
   }
 };
 
+
+/**
+ * Upload an ALREADY-PROCESSED image buffer as a profile picture.
+ *
+ * This is the buffer-based sibling of `uploadProfilePicture` (which takes a
+ * multer file). It exists so BOTH callers of the shared image pipeline —
+ * Aadhaar registration (consented photo reuse) and the later
+ * "change profile picture" endpoint — can upload the normalized bytes without
+ * having to fake a multer file object.
+ *
+ * The buffer passed here has already been resized/compressed and had its EXIF
+ * stripped by processProfileImage(); we do not touch its contents.
+ *
+ * @param {Buffer} buffer processed image bytes
+ * @param {object} meta
+ * @param {string} meta.userId owning user id (folder scoping)
+ * @param {string} [meta.contentType="image/webp"]
+ * @param {string} [meta.extension="webp"]
+ * @returns {Promise<{ s3Key, fileUrl, expiresAt }>} signed URL valid 30 min
+ */
+export const uploadProfilePictureBuffer = async (
+  buffer,
+  { userId, contentType = "image/webp", extension = "webp" } = {}
+) => {
+  if (!Buffer.isBuffer(buffer) || buffer.length === 0) {
+    throw new Error("uploadProfilePictureBuffer: a non-empty buffer is required");
+  }
+  if (!userId) {
+    throw new Error("uploadProfilePictureBuffer: userId is required");
+  }
+
+  if (!process.env.AWS_S3_BUCKET || !process.env.AWS_ACCESS_KEY_ID || !process.env.AWS_SECRET_ACCESS_KEY) {
+    throw new Error("AWS configuration is incomplete");
+  }
+
+  const randomString = crypto.randomBytes(16).toString("hex");
+  const s3Key = `profile-pictures/${userId}/${randomString}.${extension}`;
+
+  const uploadParams = {
+    Bucket: process.env.AWS_S3_BUCKET,
+    Key: s3Key,
+    Body: buffer,
+    ContentType: contentType,
+  };
+
+  try {
+    await s3Client.send(new PutObjectCommand(uploadParams));
+  } catch (uploadError) {
+    // Mirror uploadFile()'s region-mismatch auto-recovery.
+    const isPermanentRedirect =
+      uploadError?.name === "PermanentRedirect" ||
+      uploadError?.Code === "PermanentRedirect" ||
+      /PermanentRedirect/i.test(uploadError?.message ?? "");
+    if (isPermanentRedirect) {
+      const endpointHost =
+        String(uploadError?.message ?? "").match(/Endpoint:\s*'([^']+)'/i)?.[1] ||
+        uploadError?.Endpoint ||
+        uploadError?.endpoint;
+      const redirectRegion = getRegionFromS3Endpoint(endpointHost);
+      if (redirectRegion) {
+        s3Client = createS3Client({ region: redirectRegion });
+        await s3Client.send(new PutObjectCommand(uploadParams));
+      } else {
+        throw new Error(`Failed to upload to S3: ${uploadError.message}`);
+      }
+    } else {
+      throw new Error(`Failed to upload to S3: ${uploadError.message}`);
+    }
+  }
+
+  const expiresIn = 30 * 60; // 30 minutes, matching profile-picture signed URLs
+  const fileUrl = await getSignedUrl(
+    s3Client,
+    new GetObjectCommand({ Bucket: process.env.AWS_S3_BUCKET, Key: s3Key }),
+    { expiresIn }
+  );
+
+  return {
+    s3Key,
+    fileUrl,
+    expiresAt: new Date(Date.now() + expiresIn * 1000),
+  };
+};
